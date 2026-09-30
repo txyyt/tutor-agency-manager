@@ -1,0 +1,29 @@
+# 运行数据与个人资料，不入Git
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# 备份与测试产物
+*.zip
+!public/fixtures/*.zip
+test-results/
+playwright-report/
+playwright/.cache/
+coverage/
+
+# 依赖与构建
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+
+# 日志与环境
+*.log
+logs/
+.env
+.env.local
+
+# 系统文件
+Thumbs.db
+.DS_Store
