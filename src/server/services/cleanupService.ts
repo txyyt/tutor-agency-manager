@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { LIMITS, type ApplicationRecord, type OrderRecord } from '../../shared/types.js';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>;
 import type { Clock } from '../clock.js';
 import { rowToApplication, rowToOrder, type Repository } from '../repository.js';

@@ -71,7 +71,7 @@ describe('AC41：界面导出完整ZIP（数据库/附件/清单，关系金额�
   it('备份包含全部内容且校验值正确', async () => {
     const { orderId, appId } = await makeRichData('备份源');
     const orderBefore = (await getDetail(ts.client, orderId)).order;
-    const appBefore = (await ts.client.get(`/api/applications/${appId}`)).body.application;
+    const _appBefore = (await ts.client.get(`/api/applications/${appId}`)).body.application;
 
     const entry = await createManualBackup();
     expect(entry.fileName).toMatch(/^tutor-backup-manual-\d{8}-\d{6}-[0-9a-f]{6}\.zip$/);

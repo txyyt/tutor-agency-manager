@@ -198,6 +198,7 @@ export default function ApplicationDetail({ applicationId }: { navigate: (to: st
         </dl>
         {notice && <div className="alert ok" style={{ marginTop: 10 }}>{notice}</div>}
         <div className="btn-row" style={{ marginTop: 10 }}>
+          <a className="btn" href={`#/applications/${app.id}/edit`}>编辑老师资料</a>
           {app.status === 'submitted' && (
             <button type="button" className="btn" onClick={() => void doAppAction('recommend')}>{ACTION_LABELS.recommend}</button>
           )}

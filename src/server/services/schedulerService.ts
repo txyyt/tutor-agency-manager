@@ -51,7 +51,7 @@ export class Scheduler {
     if (this.running) return;
     this.running = true;
     try {
-      await this.tickDailyBackup();
+      await this.tickDailyBackup(onStartup);
       await this.tickCleanup(onStartup);
     } finally {
       this.running = false;
@@ -59,7 +59,7 @@ export class Scheduler {
   }
 
   /** 评估并执行当日备份规则（02:00后且当日未成功；失败5分钟重试）。公开供测试注入时钟后调用。 */
-  async tickDailyBackup(): Promise<void> {
+  async tickDailyBackup(onStartup = false): Promise<void> {
     const cfg = this.deps.runtime.load();
     const nowIso = this.deps.clock.iso();
     const hk = hkPartsFromUtc(nowIso);
@@ -70,7 +70,7 @@ export class Scheduler {
       ? new Date(cfg.dailyBackup.lastAttemptAtUtc).getTime()
       : 0;
     const retryDue = this.deps.clock.now().getTime() - lastAttempt >= 5 * 60 * 1000;
-    if (pastTwoAm && !doneToday && retryDue) {
+    if ((onStartup || pastTwoAm || cfg.dailyBackup.lastError !== null) && !doneToday && retryDue) {
       await this.runDailyBackup(nowIso, today);
     }
   }

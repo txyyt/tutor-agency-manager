@@ -58,19 +58,6 @@ async function waitHealth() {
   throw new Error('server not up');
 }
 
-async function api(method, reqPath, body, csrf, epoch) {
-  const res = await fetch(`${base}${reqPath}`, {
-    method,
-    headers: {
-      'X-CSRF-Token': csrf,
-      'X-Data-Epoch': String(epoch),
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  return { status: res.status, body: await res.json().catch(() => null) };
-}
-
 try {
   await waitHealth();
   // 会话
@@ -88,10 +75,10 @@ try {
   const order1 = (await order1Res.json()).order;
   // 订单2、3
   const mk = (over) => fetch(`${base}/api/orders`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify(buildOrder(null, over)) });
-  const order2 = (await (await mk({ parentName: '李爸爸', parentWechat: 'li_baba', parentPhone: '13900001111', childGrade: '高一', subjects: '英语', teachingMode: 'online', locationDetail: '线上', publicArea: '线上' })).json()).order;
+  const _order2 = (await (await mk({ parentName: '李爸爸', parentWechat: 'li_baba', parentPhone: '13900001111', childGrade: '高一', subjects: '英语', teachingMode: 'online', locationDetail: '线上', publicArea: '线上' })).json()).order;
   // 报名
   const app = async (oid, over) => (await (await fetch(`${base}/api/orders/${oid}/applications`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify(buildApp(over)) })).json()).application;
-  const a1 = await app(order1.id, { teacherName: '陈晓雨', gender: 'female', wechat: 'chen_xy', phone: '13711112222' });
+  const _a1 = await app(order1.id, { teacherName: '陈晓雨', gender: 'female', wechat: 'chen_xy', phone: '13711112222' });
   const a2 = await app(order1.id, { teacherName: '刘思远', gender: 'male', wechat: 'liu_sy', phone: '13733334444' });
   // 候选2安排试课+费用+收保证金+开始试课
   const appGet = async (id) => (await (await fetch(`${base}/api/applications/${id}`, { headers })).json());

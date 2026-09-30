@@ -37,6 +37,8 @@ export default function App() {
     page = <ApplicationForm navigate={navigate} orderId={Number(base.split('/')[2])} autoPaste={query.get('paste') === '1'} />;
   } else if (base === '/apply') {
     page = <ApplicationForm navigate={navigate} autoPaste={query.get('paste') === '1'} />;
+  } else if (/^\/applications\/\d+\/edit$/.test(base)) {
+    page = <ApplicationForm key={base} navigate={navigate} applicationId={Number(base.split('/')[2])} />;
   } else if (/^\/applications\/\d+$/.test(base)) {
     page = <ApplicationDetail navigate={navigate} applicationId={Number(base.split('/')[2])} />;
   } else if (base === '/maintenance') {

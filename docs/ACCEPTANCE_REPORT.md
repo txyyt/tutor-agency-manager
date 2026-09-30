@@ -3,6 +3,8 @@
 日期：2026-09-30。基准：docs/IMPLEMENTATION_PLAN.md V1.3（AC01—AC61）。
 本报告逐条映射验收矩阵，只记录实际执行过的测试与真实结果；未执行的项目明确标注。
 
+2026-09-30功能复核修复：R01—R09已修复，新增12项集成与2项浏览器回归。全部测试最终通过；详见FUNCTIONAL_REVIEW.md。下表类型检查、lint、构建和自动测试为本轮重新执行结果；环境核验、CLI及后续AC矩阵保留首次实施验收记录，本轮未重新执行项目data目录上的CLI恢复。
+
 ## 1. 执行环境与命令结果（真实输出）
 
 | 命令 | 结果 | 摘要 |
@@ -13,8 +15,8 @@
 | `npm run typecheck` | 通过 | server + client + scripts 三个tsconfig，0错误 |
 | `npm run lint` | 通过 | eslint 0错误0警告 |
 | `npm run build` | 通过 | vite构建 42模块（约309KB JS），tsc编译server产物 |
-| `npm test`（unit+integration） | 通过 | 单元 39/39，集成 80/80（6个文件） |
-| `npm run test:e2e` | 通过 | Playwright 16/16，Chromium真实浏览器，隔离临时数据目录（127.0.0.1:3300） |
+| `npm test`（unit+integration） | 通过 | 总计131/131（10个文件）：原119项 + 本轮12项回归 |
+| `npm run test:e2e` | 通过 | Playwright 18/18，Chromium真实浏览器，隔离临时数据目录（127.0.0.1:3300） |
 | `npm start` | 通过 | 编译产物启动，`http://127.0.0.1:3000`，health=200，静态页面200 |
 | `npm run cleanup:preview` / `npm run cleanup` / `npm run backup` / `npm run restore -- --from <zip> --yes` | 通过 | CLI对项目数据目录实际执行：备份生成ZIP、恢复完成data_epoch=2、空清理跳过且不生成备份 |
 

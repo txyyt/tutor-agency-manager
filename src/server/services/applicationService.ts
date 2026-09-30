@@ -134,6 +134,13 @@ export class ApplicationService {
     return tx(this.deps.db, () => {
       const app = this.getApplication(id);
       if (app.version !== version) throw conflict('VERSION_CONFLICT', '报名已被他人修改，请刷新后重试');
+      const acceptsPay = patch.acceptsOrderPay ?? app.acceptsOrderPay;
+      const expectedPay = patch.expectedHourlyPayCents === undefined ? app.expectedHourlyPayCents : patch.expectedHourlyPayCents;
+      if (acceptsPay ? expectedPay !== null : typeof expectedPay !== 'number' || expectedPay <= 0) {
+        throw badRequest('VALIDATION_FAILED', '请核对是否接受订单薪资及期望薪资', {
+          expectedHourlyPayCents: '接受订单薪资时应清空期望薪资；不接受时必须填写正数期望薪资',
+        });
+      }
       const columnByField: Record<string, string> = {
         teacherName: 'teacher_name', gender: 'gender', wechat: 'wechat', phone: 'phone',
         university: 'university', major: 'major', studyYear: 'study_year',
@@ -152,7 +159,7 @@ export class ApplicationService {
         if (next === undefined) continue;
         const current = app[field as keyof ApplicationRecord];
         const nextNorm = typeof next === 'boolean' ? (next ? 1 : 0) : next;
-        if (String(current) === String(nextNorm)) continue;
+        if (current === next) continue;
         sets.push(`${column} = ?`);
         params.push(nextNorm);
       }

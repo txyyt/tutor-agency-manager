@@ -214,7 +214,7 @@ export class OrderService {
         const current = order[field as keyof OrderRecord];
         const nextNorm = typeof next === 'boolean' ? (next ? 1 : 0) : next;
         // 无变化保存不更新时间（防止无操作延期90天清理）
-        if (String(current) === String(nextNorm)) continue;
+        if (current === next) continue;
         sets.push(`${column} = ?`);
         params.push(nextNorm);
       }

@@ -88,8 +88,20 @@ export class RuntimeConfigStore {
   }
 
   mutate(fn: (cfg: RuntimeConfig) => void): void {
-    const cfg = this.load();
+    const cfg = structuredClone(this.load());
     fn(cfg);
-    this.save();
+    this.replace(cfg);
+  }
+
+  /** 同步持久化失败时还原缓存，避免内存指针和磁盘指针分离。 */
+  replace(cfg: RuntimeConfig): void {
+    const previous = this.load();
+    this.cache = structuredClone(cfg);
+    try {
+      this.save();
+    } catch (err) {
+      this.cache = previous;
+      throw err;
+    }
   }
 }

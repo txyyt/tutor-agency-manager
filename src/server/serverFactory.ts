@@ -208,6 +208,7 @@ export function createServer(env: Env): AppServer {
         restores,
         scheduler,
         onRecordChanged: persistHighWater,
+        maintenance,
       });
       // 启动补做：当日备份 + 清理（CLI操作时可跳过）
       if (runScheduler) scheduler.start();

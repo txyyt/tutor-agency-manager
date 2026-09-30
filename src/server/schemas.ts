@@ -8,6 +8,9 @@ const trimmed = (min: number, max: number, label: string) =>
 const optionalText = (max: number, label: string) =>
   z.string().max(max, `${label}过长（最多${max}字）`).optional().default('');
 
+const patchText = (max: number, label: string) =>
+  z.string().max(max, `${label}过长（最多${max}字）`).optional();
+
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为YYYY-MM-DD').nullable().optional();
 
 const phoneSchema = z
@@ -72,9 +75,9 @@ export const orderUpdateSchema = z.object({
   hourlyPayCents: z.number().int().gt(0).optional(),
   payNegotiable: z.boolean().optional(),
   genderPreference: z.enum(['any', 'male', 'female']).optional(),
-  teacherRequirements: optionalText(1000, '老师要求'),
-  publicRequirements: optionalText(1000, '公开老师要求'),
-  notes: optionalText(2000, '内部备注'),
+  teacherRequirements: patchText(1000, '老师要求'),
+  publicRequirements: patchText(1000, '公开老师要求'),
+  notes: patchText(2000, '内部备注'),
 }).strip();
 
 export const applicationCreateSchema = z
@@ -115,7 +118,7 @@ export const applicationUpdateSchema = z.object({
   major: trimmed(1, 100, '专业').optional(),
   studyYear: trimmed(1, 30, '当前年级').optional(),
   teachableSubjectsGrades: trimmed(1, 300, '可辅导的科目及年级').optional(),
-  achievements: optionalText(2000, '成绩能力说明'),
+  achievements: patchText(2000, '成绩能力说明'),
   teachingExperience: trimmed(1, 2000, '教学经验').optional(),
   strengthsAndPlan: trimmed(1, 2000, '优势与辅导思路').optional(),
   availableSchedule: trimmed(1, 300, '可上课时间').optional(),
@@ -123,8 +126,8 @@ export const applicationUpdateSchema = z.object({
   acceptsOrderPay: z.boolean().optional(),
   expectedHourlyPayCents: z.number().int().gt(0).nullable().optional(),
   canAttendTrial: z.boolean().optional(),
-  trialConstraints: optionalText(500, '试课时间限制'),
-  notes: optionalText(2000, '内部备注'),
+  trialConstraints: patchText(500, '试课时间限制'),
+  notes: patchText(2000, '内部备注'),
 }).strip();
 
 export const parseImportSchema = z.object({

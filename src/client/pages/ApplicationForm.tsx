@@ -2,10 +2,10 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { CopyButton, ErrorAlert, Field, TextBlock } from '../components/ui';
-import { yuanStringToCents } from '../../shared/money';
+import { centsToYuanString, yuanStringToCents } from '../../shared/money';
 import { TEACHER_TEMPLATE } from '../../shared/templates';
 import type { TemplateParseResult } from '../../shared/parsing/parseTemplate';
-import type { OrderRecord } from '../../shared/types';
+import type { ApplicationRecord, OrderRecord } from '../../shared/types';
 
 type ParseResponse = TemplateParseResult & {
   form: Record<string, unknown>;
@@ -31,9 +31,11 @@ const EMPTY: FormState = {
   notes: '',
 };
 
-export default function ApplicationForm({ navigate, orderId, autoPaste }: { navigate: (to: string) => void; orderId?: number; autoPaste?: boolean }) {
+export default function ApplicationForm({ navigate, orderId, applicationId, autoPaste }: { navigate: (to: string) => void; orderId?: number; applicationId?: number; autoPaste?: boolean }) {
   void autoPaste; // 从订单页跳转时带 paste=1；粘贴区默认展开，无需额外处理
-  const fixedOrder = Boolean(orderId);
+  const editing = Boolean(applicationId);
+  const fixedOrder = Boolean(orderId) || editing;
+  const [version, setVersion] = useState<number | null>(null);
   const [targetOrder, setTargetOrder] = useState<OrderRecord | null>(null);
   const [orderNoInput, setOrderNoInput] = useState('');
   const [orderLookupError, setOrderLookupError] = useState('');
@@ -49,13 +51,29 @@ export default function ApplicationForm({ navigate, orderId, autoPaste }: { navi
 
   // 指定订单：加载订单信息（供编号校验）
   useEffect(() => {
-    if (fixedOrder) {
+    if (applicationId) {
+      void api.get<{ application: ApplicationRecord; order: OrderRecord }>(`/api/applications/${applicationId}`)
+        .then(({ application: a, order }) => {
+          setTargetOrder(order);
+          setVersion(a.version);
+          setForm({
+            teacherName: a.teacherName, gender: a.gender, wechat: a.wechat, phone: a.phone,
+            university: a.university, major: a.major, studyYear: a.studyYear,
+            teachableSubjectsGrades: a.teachableSubjectsGrades, achievements: a.achievements,
+            teachingExperience: a.teachingExperience, strengthsAndPlan: a.strengthsAndPlan,
+            availableSchedule: a.availableSchedule, earliestStartDate: a.earliestStartDate ?? '',
+            acceptsOrderPay: a.acceptsOrderPay ? 'yes' : 'no',
+            expectedHourlyPay: a.expectedHourlyPayCents === null ? '' : centsToYuanString(a.expectedHourlyPayCents),
+            canAttendTrial: a.canAttendTrial ? 'yes' : 'no', trialConstraints: a.trialConstraints, notes: a.notes,
+          });
+        }).catch(setError);
+    } else if (orderId) {
       void api
         .get<{ order: OrderRecord }>(`/api/orders/${orderId}`)
         .then((d) => setTargetOrder(d.order))
         .catch(setError);
     }
-  }, [fixedOrder, orderId]);
+  }, [applicationId, orderId]);
 
   const lookUpOrder = async () => {
     setOrderLookupError('');
@@ -145,6 +163,11 @@ export default function ApplicationForm({ navigate, orderId, autoPaste }: { navi
         creationRequestId: crypto.randomUUID(),
       };
       if (parseResult) payload.sourceTemplateText = parseResult.sourceText ?? pasteText;
+      if (editing) {
+        await api.patch(`/api/applications/${applicationId}`, { ...payload, version });
+        navigate(`/applications/${applicationId}`);
+        return;
+      }
       const r = await api.post<{ application: { id: number }; duplicated: boolean; duplicateWarning: string | null }>(
         `/api/orders/${targetOrder.id}/applications`,
         payload,
@@ -159,13 +182,13 @@ export default function ApplicationForm({ navigate, orderId, autoPaste }: { navi
     }
   };
 
-  const orderStatusBad = targetOrder && !['recruiting', 'reviewing', 'awaiting_trial', 'trialing'].includes(targetOrder.status);
+  const orderStatusBad = !editing && targetOrder && !['recruiting', 'reviewing', 'awaiting_trial', 'trialing'].includes(targetOrder.status);
   const orderMismatched = parseResult?.orderInfo && targetOrder && parseResult.orderInfo.orderNo !== targetOrder.orderNo;
 
   return (
     <>
       <div className="card">
-        <h2>老师报名录入（无授课区域字段；微信、电话必填）</h2>
+        <h2>{editing ? '编辑老师资料' : '老师报名录入（微信、电话必填）'}</h2>
         <ErrorAlert error={error} />
         {notice && <div className="alert warn">{notice}</div>}
         {!fixedOrder && (
@@ -186,7 +209,7 @@ export default function ApplicationForm({ navigate, orderId, autoPaste }: { navi
         {targetOrder && (
           <div className={`alert ${orderStatusBad ? 'error' : 'info'}`}>
             报名订单：{targetOrder.orderNo}
-            {orderStatusBad
+            {editing ? ' — 修改本次报名的资料' : orderStatusBad
               ? ` — 当前状态为“${targetOrder.status}”，不能接收报名`
               : targetOrder.status === 'recruiting' || targetOrder.status === 'reviewing'
                 ? ' — 可接收候选报名（不会自动改变订单进度）'
@@ -196,7 +219,7 @@ export default function ApplicationForm({ navigate, orderId, autoPaste }: { navi
         )}
       </div>
 
-      <div className="card paste-box">
+      {!editing && <div className="card paste-box">
         <h2>粘贴老师模板自动填写</h2>
         <textarea
           value={pasteText}
@@ -235,7 +258,7 @@ export default function ApplicationForm({ navigate, orderId, autoPaste }: { navi
             )}
           </div>
         )}
-      </div>
+      </div>}
 
       <form className="card" onSubmit={submit}>
         <h2>报名表单</h2>
@@ -319,9 +342,9 @@ export default function ApplicationForm({ navigate, orderId, autoPaste }: { navi
         </div>
         <div className="btn-row">
           <button type="submit" className="btn primary" disabled={saving || !targetOrder || Boolean(orderStatusBad)}>
-            {saving ? '保存中…' : '保存报名（状态：已报名）'}
+            {saving ? '保存中…' : editing ? '保存修改' : '保存报名（状态：已报名）'}
           </button>
-          <button type="button" className="btn" onClick={() => navigate(fixedOrder ? `/orders/${orderId}` : '/')}>取消</button>
+          <button type="button" className="btn" onClick={() => navigate(editing ? `/applications/${applicationId}` : fixedOrder ? `/orders/${orderId}` : '/')}>取消</button>
         </div>
       </form>
     </>

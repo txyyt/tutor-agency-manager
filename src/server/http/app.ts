@@ -40,6 +40,7 @@ import type { CleanupService } from '../services/cleanupService.js';
 import type { BackupService } from '../services/backupService.js';
 import type { RestoreService } from '../services/restoreService.js';
 import type { Scheduler } from '../services/schedulerService.js';
+import type { MaintenanceMutex } from '../locks.js';
 import {
   applicationActionSchema,
   applicationCreateSchema,
@@ -68,6 +69,7 @@ interface Services {
   backups: BackupService;
   restores: RestoreService;
   scheduler: Scheduler;
+  maintenance: MaintenanceMutex;
   onRecordChanged: () => void; // 编号高水位落盘等
 }
 
@@ -160,7 +162,7 @@ export function createApp(svc: Services): Express {
   });
 
   // ---- 维护门：恢复切换期间暂停读写（进度端点除外） ----
-  const MAINTENANCE_EXEMPT = ['/api/maintenance/operations/', '/api/session', '/api/health'];
+  const MAINTENANCE_EXEMPT = ['/maintenance/operations/', '/session', '/health'];
   app.use('/api', (req, res, next) => {
     if (!svc.active.isOpen && !MAINTENANCE_EXEMPT.some((p) => req.path.startsWith(p))) {
       return next(new AppError(503, 'MAINTENANCE', '数据正在恢复切换，请稍后刷新页面重试'));
@@ -172,6 +174,9 @@ export function createApp(svc: Services): Express {
   const MUTATING = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
   app.use('/api', (req, res, next) => {
     if (!MUTATING.has(req.method)) return next();
+    if (svc.maintenance.isHeld) {
+      return next(new AppError(503, 'MAINTENANCE', '正在执行数据维护，请稍后重试；本次修改尚未保存'));
+    }
     const session = getSession(req);
     if (!session) {
       return next(unauthorizedOrigin('缺少本机会话，请刷新页面后重试'));
@@ -266,7 +271,8 @@ export function createApp(svc: Services): Express {
   });
 
   app.get('/api/orders/:id', (req, res) => {
-    const order = svc.orders.getOrder(Number(req.params.id));
+    const order = svc.orders.getOrderByNoOrId(String(req.params.id));
+    if (!order) throw notFound('订单不存在，请核对订单编号或ID');
     const apps = svc.repo.listApplicationsOfOrder(order.id);
     const applications = apps.map((a) => ({
       ...a,
@@ -399,6 +405,13 @@ export function createApp(svc: Services): Express {
     uploadAttachment.array('files', LIMITS.maxAttachmentsPerApplication)(req, res, (err) => {
       if (err) return next(mapMulterError(err));
       try {
+        // multipart读取期间可能开始恢复；不得将旧页面上传写入新数据代。
+        if (svc.maintenance.isHeld || !svc.active.isOpen) {
+          throw new AppError(503, 'MAINTENANCE', '正在执行数据维护，附件尚未保存，请稍后重试');
+        }
+        if (req.headers['x-data-epoch'] !== String(svc.runtime.load().dataEpoch)) {
+          throw conflict('DATA_EPOCH_CONFLICT', '数据已恢复，请刷新页面后重新上传附件');
+        }
         const version = Number(req.body?.version);
         if (!Number.isInteger(version)) throw badRequest('VALIDATION_FAILED', '缺少version（并发保护）');
         const files: UploadedFile[] = (req.files as Express.Multer.File[] ?? []).map((f) => ({

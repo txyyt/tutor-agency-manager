@@ -328,6 +328,11 @@ export class RestoreService {
       if (state.used) {
         throw conflict('TOKEN_USED', '该恢复令牌已使用，不能重复执行恢复');
       }
+      if (this.deps.clock.now().getTime() - Date.parse(state.createdAtUtc) >= LIMITS.restoreTokenTtlMs) {
+        this.tokens.delete(token);
+        fs.rmSync(state.stagingDir, { recursive: true, force: true });
+        throw badRequest('TOKEN_INVALID', '恢复令牌已过期，请重新上传备份包校验');
+      }
       if (state.epochAtValidate !== this.deps.runtime.load().dataEpoch) {
         throw conflict('EPOCH_CONFLICT', '校验之后数据已变化（如完成过一次恢复），请重新上传备份包校验');
       }
@@ -380,8 +385,9 @@ export class RestoreService {
         };
         this.writeOpState(opState);
 
-        // 等待在途请求结束后原子切换
-        const cfg = this.deps.runtime.load();
+        // HTTP维护门已阻止新写入，multipart完成后也会复查维护状态及epoch。
+        const originalCfg = structuredClone(this.deps.runtime.load());
+        const cfg = structuredClone(originalCfg);
         const newEpoch = cfg.dataEpoch + 1;
         const mergedHigh = {
           orders: Math.max(cfg.numberHighWater.orders, hwOrders),
@@ -392,21 +398,27 @@ export class RestoreService {
           cfg.activeGenerationId = targetGenId;
           cfg.dataEpoch = newEpoch;
           cfg.numberHighWater = mergedHigh;
-          this.deps.runtime.save(); // 原子写入 = 切换点
+          this.deps.runtime.replace(cfg); // 原子写入 = 切换点
+          this.deps.active.open(targetGenId, targetDir);
         } catch (err) {
-          // 配置写入失败：回滚到原代
-          this.deps.active.open(this.deps.runtime.load().activeGenerationId, generationDir(this.deps.paths, this.deps.runtime.load().activeGenerationId));
+          // 写配置或打开新代失败：恢复内存、磁盘指针及数据库连接。
+          if (this.deps.runtime.load().activeGenerationId !== originalCfg.activeGenerationId) {
+            this.deps.runtime.replace(originalCfg);
+          }
+          this.deps.active.open(originalCfg.activeGenerationId, generationDir(this.deps.paths, originalCfg.activeGenerationId));
           throw err;
         }
-        // 打开新代
-        this.deps.active.open(targetGenId, targetDir);
-        // 提交恢复：清理旧代，结束操作
-        const oldGenId = opState.sourceGenerationId;
-        if (oldGenId && oldGenId !== targetGenId) {
-          fs.rmSync(generationDir(this.deps.paths, oldGenId), { recursive: true, force: true });
+        // 已成功切换。收尾失败保留prepared标记，重启对账重试，不能误报恢复失败。
+        try {
+          const oldGenId = opState.sourceGenerationId;
+          if (oldGenId && oldGenId !== targetGenId) {
+            fs.rmSync(generationDir(this.deps.paths, oldGenId), { recursive: true, force: true });
+          }
+          fs.rmSync(state.stagingDir, { recursive: true, force: true });
+          this.writeOpState({ ...opState, status: 'finished', finishedAtUtc: this.deps.clock.iso() });
+        } catch (err) {
+          console.error('恢复已完成，收尾将在下次启动时重试：', err);
         }
-        this.writeOpState({ ...opState, status: 'finished', finishedAtUtc: this.deps.clock.iso() });
-        fs.rmSync(state.stagingDir, { recursive: true, force: true });
         this.tokens.delete(token);
         return { opId, epoch: newEpoch, restoredCounts: state.preview.counts };
       } catch (err) {
