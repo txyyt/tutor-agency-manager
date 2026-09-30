@@ -1,13 +1,15 @@
-// 首页：统计 + 订单列表（搜索/筛选/分页）+ 新建/粘贴/模板复制/招募导出入口。
-import { useCallback, useEffect, useState } from 'react';
+// 首页：统计 + 订单列表（搜索/筛选/分页）+ 新建/粘贴/招募导出入口。
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, downloadFile, fetchText } from '../api';
 import { CopyButton, Pagination, StatusBadge, TextBlock, TimeText, ErrorAlert } from '../components/ui';
 import { ORDER_STATUS_LABELS } from '../../shared/types';
 import { centsToYuanString } from '../../shared/money';
+import type { OrderTask } from '../../shared/orderTasks';
 import type { OrderRecord } from '../../shared/types';
+import Icon from '../components/Icon';
 
 interface ListResponse {
-  items: OrderRecord[];
+  items: Array<OrderRecord & { tasks: OrderTask[] }>;
   total: number;
   page: number;
   pageSize: number;
@@ -28,13 +30,23 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
   const [status, setStatus] = useState(query.get('status') ?? '');
   const [subject, setSubject] = useState(query.get('subject') ?? '');
   const [grade, setGrade] = useState(query.get('grade') ?? '');
+  const [needsAction, setNeedsAction] = useState(false);
+  const [sort, setSort] = useState('updated-desc');
+  const [tasksFirst, setTasksFirst] = useState(true);
   const [page, setPage] = useState(Number(query.get('page') ?? 1));
   const [recruitingPreview, setRecruitingPreview] = useState<string | null>(null);
-  const [templates, setTemplates] = useState<{ parent: string | null; teacher: string | null }>({ parent: null, teacher: null });
+  const exportPreviewRef = useRef<HTMLDivElement>(null);
+  const [exportScrollRequest, setExportScrollRequest] = useState(0);
+  useEffect(() => {
+    if (exportScrollRequest > 0 && recruitingPreview !== null) {
+      exportPreviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [exportScrollRequest, recruitingPreview]);
 
   const load = useCallback(async () => {
     try {
-      const params = new URLSearchParams({ page: String(page), pageSize: '20' });
+      const params = new URLSearchParams({ page: String(page), pageSize: '20', sort, tasksFirst: tasksFirst ? '1' : '0' });
+      if (needsAction) params.set('needsAction', '1');
       if (q) params.set('q', q);
       if (status) params.set('status', status);
       if (subject) params.set('subject', subject);
@@ -45,7 +57,7 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
     } catch (e) {
       setError(e);
     }
-  }, [page, q, status, subject, grade]);
+  }, [page, q, status, subject, grade, needsAction, sort, tasksFirst]);
 
   useEffect(() => {
     void load();
@@ -54,15 +66,7 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
   const showRecruitingExport = async () => {
     try {
       setRecruitingPreview(await fetchText('/api/exports/recruiting'));
-    } catch (e) {
-      setError(e);
-    }
-  };
-
-  const loadTemplate = async (name: 'parent' | 'teacher') => {
-    try {
-      const t = await api.get<{ name: string; text: string }>(`/api/templates/${name}`);
-      setTemplates((prev) => ({ ...prev, [name]: t.text }));
+      setExportScrollRequest(n => n + 1);
     } catch (e) {
       setError(e);
     }
@@ -72,25 +76,22 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
     <>
       {dash && (
         <div className="stat-grid">
-          <div className="stat"><div className="num">{dash.statusCounts.recruiting ?? 0}</div><div className="label">招募中</div></div>
-          <div className="stat"><div className="num">{dash.statusCounts.reviewing ?? 0}</div><div className="label">家长挑选中</div></div>
-          <div className="stat"><div className="num">{(dash.statusCounts.awaiting_trial ?? 0) + (dash.statusCounts.trialing ?? 0)}</div><div className="label">待试课/试课中</div></div>
-          <div className="stat warn"><div className="num">{dash.pendingRefund.count}</div><div className="label">待退款（{(dash.pendingRefund.cents / 100).toFixed(2)}元）</div></div>
-          <div className="stat"><div className="num">{dash.pendingSupplement.count}</div><div className="label">待补款（{(dash.pendingSupplement.cents / 100).toFixed(2)}元）</div></div>
+          <div className="stat"><div className="stat-top"><span className="label">招募中</span><span className="stat-icon green"><Icon name="file" /></span></div><div className="num">{dash.statusCounts.recruiting ?? 0}<span className="stat-unit">单</span></div><div className="stat-foot">等待合适的老师报名</div></div>
+          <div className="stat"><div className="stat-top"><span className="label">待结算</span><span className="stat-icon blue"><Icon name="users" /></span></div><div className="num">{dash.statusCounts.reviewing ?? 0}<span className="stat-unit">单</span></div><div className="stat-foot">合作已确认，等待费用结清</div></div>
+          <div className="stat"><div className="stat-top"><span className="label">待试课/试课中</span><span className="stat-icon purple"><Icon name="clock" /></span></div><div className="num">{(dash.statusCounts.awaiting_trial ?? 0) + (dash.statusCounts.trialing ?? 0)}<span className="stat-unit">单</span></div><div className="stat-foot">关注试课安排与反馈</div></div>
+          <div className="stat warn"><div className="stat-top"><span className="label">待退款</span><span className="stat-icon orange"><Icon name="wallet" /></span></div><div className="num">{dash.pendingRefund.count}<span className="stat-unit">笔</span></div><div className="stat-foot">待退金额 ¥{(dash.pendingRefund.cents / 100).toFixed(2)}</div></div>
+          <div className="stat"><div className="stat-top"><span className="label">待收中介费</span><span className="stat-icon green"><Icon name="check" /></span></div><div className="num">{dash.pendingSupplement.count}<span className="stat-unit">笔</span></div><div className="stat-foot">待收金额 ¥{(dash.pendingSupplement.cents / 100).toFixed(2)}</div></div>
         </div>
       )}
 
-      <div className="card">
-        <h2>订单</h2>
-        <div className="btn-row" style={{ marginBottom: 12 }}>
-          <button type="button" className="btn primary" onClick={() => navigate('/orders/new')}>新建订单</button>
-          <button type="button" className="btn" onClick={() => navigate('/orders/new?paste=1')}>粘贴家长模板建单</button>
+      <div className="card order-board">
+        <div className="board-heading"><div><h2>订单</h2><p>集中查看需求，跟进每一个合作机会。</p></div><span className="record-count">{data ? `${data.total} 条记录` : '加载中…'}</span></div>
+        <div className="btn-row board-actions">
+          <button type="button" className="btn primary" onClick={() => navigate('/orders/new')}><Icon name="plus" size={17} />新建订单</button>
           <button type="button" className="btn" onClick={showRecruitingExport}>导出全部招募中文字</button>
           <a className="btn" href="#" onClick={(e) => { e.preventDefault(); void downloadFile('/api/exports/recruiting', 'recruiting.txt'); }}>
             下载招募TXT
           </a>
-          <button type="button" className="btn" onClick={() => void loadTemplate('parent')}>家长模板</button>
-          <button type="button" className="btn" onClick={() => void loadTemplate('teacher')}>老师模板</button>
         </div>
 
         <div className="filter-bar">
@@ -101,6 +102,14 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
               <option key={k} value={k}>{v}</option>
             ))}
           </select>
+<label className="inline-flex"><input type="checkbox" checked={needsAction} onChange={e => { setNeedsAction(e.target.checked); setPage(1); }} />只看需要处理</label>
+          <select aria-label="订单排序" value={sort} onChange={e => { setSort(e.target.value); setPage(1); }}>
+            <option value="updated-desc">最近修改：新到旧</option>
+            <option value="updated-asc">最近修改：旧到新</option>
+            <option value="number-desc">订单编号：大到小</option>
+            <option value="number-asc">订单编号：小到大</option>
+          </select>
+          <label className="inline-flex"><input type="checkbox" checked={tasksFirst} onChange={e => { setTasksFirst(e.target.checked); setPage(1); }} />待办优先</label>
           <input placeholder="科目筛选" value={subject} onChange={(e) => { setPage(1); setSubject(e.target.value); }} style={{ width: 110 }} />
           <input placeholder="年级筛选" value={grade} onChange={(e) => { setPage(1); setGrade(e.target.value); }} style={{ width: 110 }} />
         </div>
@@ -110,7 +119,7 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
         {data && data.items.length === 0 && <div className="empty">暂无订单。点击“新建订单”或“粘贴家长模板建单”开始。</div>}
 
         {data && data.items.length > 0 && (
-          <table className="list">
+          <div className="table-scroll"><table className="list">
             <thead>
               <tr>
                 <th>编号</th>
@@ -119,13 +128,14 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
                 <th>年级/科目</th>
                 <th>方式/区域</th>
                 <th>薪资</th>
-                <th>报名</th>
+                <th>待办提示</th>
+                <th className="table-action">操作</th>
                 <th>最近修改</th>
               </tr>
             </thead>
             <tbody>
               {data.items.map((o) => (
-                <tr key={o.id}>
+                <tr key={o.id} className={o.tasks?.length ? 'needs-action' : ''}>
                   <td><a href={`#/orders/${o.id}`}>{o.orderNo}</a></td>
                   <td><StatusBadge status={o.status} /></td>
                   <td>{o.parentName}</td>
@@ -140,18 +150,19 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
                     <span style={{ color: 'var(--muted)' }}>{o.publicArea}</span>
                   </td>
                   <td>{centsToYuanString(o.hourlyPayCents)}元/时{o.payNegotiable ? '（可协商）' : ''}</td>
-                  <td><a href={`#/orders/${o.id}`}>查看/报名</a></td>
+                  <td><div className="task-list">{o.tasks?.map(t => <span key={t.kind} className={`task-tag task-${t.kind}`}>{t.label}</span>)}{!o.tasks?.length && <span className="hint">—</span>}</div></td>
+                  <td className="table-action"><a href={`#/orders/${o.id}`}>查看/报名</a></td>
                   <td><TimeText iso={o.updatedAt} /></td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
         {data && <Pagination page={data.page} pageSize={data.pageSize} total={data.total} onPage={setPage} />}
       </div>
 
       {recruitingPreview !== null && (
-        <div className="card">
+        <div className="card" ref={exportPreviewRef}>
           <h2>全部招募中导出预览</h2>
           <div className="alert info">导出不受筛选/分页影响，包含全部“招募中”订单。复制后手动粘贴到微信群；不含家长联系方式、详细地址、内部备注与费用。</div>
           <TextBlock text={recruitingPreview} maxHeight={400} />
@@ -163,28 +174,6 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
         </div>
       )}
 
-      {templates.parent && (
-        <div className="card">
-          <h2>家长需求模板</h2>
-          <div className="alert info">把模板发给家长填写；收到后用“粘贴家长模板建单”自动录入。</div>
-          <TextBlock text={templates.parent} maxHeight={360} />
-          <div className="btn-row" style={{ marginTop: 10 }}>
-            <CopyButton text={templates.parent} label="复制模板" />
-            <button type="button" className="btn" onClick={() => setTemplates((t) => ({ ...t, parent: null }))}>关闭</button>
-          </div>
-        </div>
-      )}
-      {templates.teacher && (
-        <div className="card">
-          <h2>大学生报名模板</h2>
-          <div className="alert info">老师按订单编号报名；收到后用“粘贴老师报名”自动录入。</div>
-          <TextBlock text={templates.teacher} maxHeight={360} />
-          <div className="btn-row" style={{ marginTop: 10 }}>
-            <CopyButton text={templates.teacher} label="复制模板" />
-            <button type="button" className="btn" onClick={() => setTemplates((t) => ({ ...t, teacher: null }))}>关闭</button>
-          </div>
-        </div>
-      )}
     </>
   );
 }

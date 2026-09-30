@@ -39,8 +39,8 @@ export const orderCreateSchema = z.object({
   learningSituation: trimmed(1, 1000, '目前学习情况'),
   tutoringGoal: trimmed(1, 1000, '辅导目标'),
   teachingMode: z.enum(['online', 'offline'], { message: '上课方式必须是线上或线下' }),
-  locationDetail: trimmed(1, 200, '上课区域及地点'),
-  publicArea: trimmed(1, 100, '公开区域（用于群内发布）'),
+  locationDetail: trimmed(0, 200, '上课区域及地点').optional().default(''),
+  publicArea: trimmed(0, 100, '公开区域（用于群内发布）').optional().default(''),
   weeklySchedule: trimmed(1, 300, '每周可上课时间'),
   publicSchedule: trimmed(1, 300, '公开上课时间（用于群内发布）'),
   sessionsPerWeek: z.number().int('每周次数必须是整数').min(1).max(28),
@@ -54,7 +54,11 @@ export const orderCreateSchema = z.object({
   notes: optionalText(2000, '内部备注'),
   sourceTemplateText: z.string().max(LIMITS.maxTemplateTextChars).nullable().optional(),
   creationRequestId: z.string().uuid().nullable().optional(),
-});
+}).superRefine((v, ctx) => {
+  if (v.teachingMode === 'offline') {
+    if (!v.publicArea) ctx.addIssue({ code: 'custom', path: ['publicArea'], message: '线下上课必须填写公开授课区域' });
+  }
+}).transform((v) => v.teachingMode === 'online' ? { ...v, locationDetail: '线上', publicArea: '线上' } : v);
 
 export const orderUpdateSchema = z.object({
   parentName: trimmed(1, 60, '家长称呼').optional(),
@@ -65,8 +69,8 @@ export const orderUpdateSchema = z.object({
   learningSituation: trimmed(1, 1000, '目前学习情况').optional(),
   tutoringGoal: trimmed(1, 1000, '辅导目标').optional(),
   teachingMode: z.enum(['online', 'offline']).optional(),
-  locationDetail: trimmed(1, 200, '上课区域及地点').optional(),
-  publicArea: trimmed(1, 100, '公开区域').optional(),
+  locationDetail: trimmed(0, 200, '上课区域及地点').optional(),
+  publicArea: trimmed(0, 100, '公开区域').optional(),
   weeklySchedule: trimmed(1, 300, '每周可上课时间').optional(),
   publicSchedule: trimmed(1, 300, '公开上课时间').optional(),
   sessionsPerWeek: z.number().int().min(1).max(28).optional(),
@@ -137,7 +141,7 @@ export const parseImportSchema = z.object({
 });
 
 export const orderActionSchema = z.object({
-  action: z.enum(['review', 'recruit', 'pause', 'resume', 'cancel', 'complete', 'start-trial']),
+  action: z.enum(['pause', 'resume', 'cancel', 'complete', 'start-trial']),
   version: z.number().int(),
   target: z.string().optional(),
 });
@@ -179,6 +183,7 @@ export const recommendationsSchema = z.object({
 });
 
 export const backupSettingsSchema = z.object({
+  dailyBackupTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, '每日备份时间须为HH:mm（00:00—23:59）').optional(),
   dailyKeepCount: z.number().int().min(1).optional(),
   autoBackupDir: z.string().min(1).nullable().optional(),
   importMaxUploadBytes: z.number().int().min(1024 * 1024).optional(),

@@ -3,7 +3,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { ACTIVE_APPLICATION_STATUSES, type OrderRecord, type OrderStatus } from '../../shared/types.js';
 import { hkCompactDateString } from '../../shared/datetime.js';
 import { rowToOrder, type Repository } from '../repository.js';
-import { conflict, notFound } from '../errors.js';
+import { badRequest, conflict, notFound } from '../errors.js';
+import { computeFinanceState, financeContextFor } from '../../shared/finance.js';
+import { orderTasks, type OrderTask } from '../../shared/orderTasks.js';
 import { tx } from '../transaction.js';
 
 export interface ServiceDeps {
@@ -132,9 +134,12 @@ export class OrderService {
     grade?: string;
     dateFrom?: string;
     dateTo?: string;
+    needsAction?: boolean;
+    sort?: 'updated-desc' | 'updated-asc' | 'number-desc' | 'number-asc';
+    tasksFirst?: boolean;
     page: number;
     pageSize: number;
-  }): { items: OrderRecord[]; total: number; page: number; pageSize: number } {
+  }): { items: Array<OrderRecord & { tasks: OrderTask[] }>; total: number; page: number; pageSize: number } {
     const where: string[] = [];
      
     const params: any[] = [];
@@ -164,6 +169,7 @@ export class OrderService {
       params.push(query.dateTo);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    /* 所有筛选先计算待办，再分页，避免仅筛选当前页。 */
     const totalRow = this.deps.db
       .prepare(`SELECT COUNT(*) AS c FROM orders ${whereSql}`)
       .get(...params) as { c: number };
@@ -171,12 +177,25 @@ export class OrderService {
     const page = Math.max(query.page, 1);
     const rows = this.deps.db
       .prepare(
-        `SELECT * FROM orders ${whereSql} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`,
+        `SELECT * FROM orders ${whereSql} ORDER BY updated_at DESC, id DESC`,
       )
-      .all(...params, pageSize, (page - 1) * pageSize) as Row[];
+      .all(...params) as Row[];
+    const items = rows.map(rowToOrder).map(order => ({ ...order, tasks: orderTasks(order, this.deps.repo.listApplicationsOfOrder(order.id)) })).filter(order => !query.needsAction || order.tasks.length > 0);
+    items.sort((a, b) => {
+      if (query.tasksFirst !== false) {
+        const priority = Number(b.tasks.length > 0) - Number(a.tasks.length > 0);
+        if (priority) return priority;
+      }
+      switch (query.sort) {
+        case 'updated-asc': return a.updatedAt.localeCompare(b.updatedAt) || a.id - b.id;
+        case 'number-asc': return a.orderNo.localeCompare(b.orderNo) || a.id - b.id;
+        case 'number-desc': return b.orderNo.localeCompare(a.orderNo) || b.id - a.id;
+        default: return b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id;
+      }
+    });
     return {
-      items: rows.map(rowToOrder),
-      total: totalRow.c,
+      items: items.slice((page - 1) * pageSize, page * pageSize),
+      total: query.needsAction ? items.length : totalRow.c,
       page,
       pageSize,
     };
@@ -204,6 +223,13 @@ export class OrderService {
         teacherRequirements: 'teacher_requirements', publicRequirements: 'public_requirements',
         notes: 'notes',
       };
+      const merged = { ...order, ...patch };
+      if (merged.teachingMode === 'online') patch = { ...patch, locationDetail: '线上', publicArea: '线上' };
+      else if (!merged.publicArea.trim()) {
+        throw badRequest('VALIDATION_FAILED', '请补填线下授课区域', {
+          ...(!merged.publicArea.trim() ? { publicArea: '线下上课必须填写公开授课区域' } : {}),
+        });
+      }
       const sets: string[] = [];
        
       const params: any[] = [];
@@ -246,20 +272,8 @@ export class OrderService {
       }
       const now = this.nowIso();
       switch (action) {
-        case 'review': {
-          this.assertStatus(order, ['recruiting'], '开始家长挑选');
-          this.assertNotCurrentRef(order, '开始家长挑选');
-          this.updateOrderRow(id, { status: 'reviewing' }, now);
-          break;
-        }
-        case 'recruit': {
-          this.assertStatus(order, ['reviewing'], '继续招募');
-          this.assertNotCurrentRef(order, '继续招募');
-          this.updateOrderRow(id, { status: 'recruiting' }, now);
-          break;
-        }
         case 'pause': {
-          this.assertStatus(order, ['recruiting', 'reviewing'], '暂停');
+          this.assertStatus(order, ['recruiting'], '暂停');
           this.assertNotCurrentRef(order, '暂停');
           this.updateOrderRow(id, { status: 'paused', pausedFromStatus: order.status }, now);
           break;
@@ -346,7 +360,7 @@ export class OrderService {
       throw conflict('STATE_CONFLICT', '成交报名必须处于“试课通过”或“直接合作”状态');
     }
     if (!matched.cooperationConfirmedAt) {
-      throw conflict('COOPERATION_NOT_CONFIRMED', '尚未确认合作：试课通过不代表双方确认，请先执行“确认合作”');
+      throw conflict('COOPERATION_NOT_CONFIRMED', '当前老师的合作确认记录缺失，请刷新并核对资料');
     }
     if (order.matchedApplicationId !== null && order.matchedApplicationId !== order.currentApplicationId) {
       throw conflict('STATE_CONFLICT', '成交报名引用与当前报名不一致，数据异常');
@@ -446,33 +460,21 @@ export class OrderService {
     const statusCounts: Record<string, number> = {};
     const rows = this.deps.db.prepare('SELECT status, COUNT(*) AS c FROM orders GROUP BY status').all() as Row[];
     for (const r of rows) statusCounts[r.status as string] = r.c;
-    const refundRow = this.deps.db
-      .prepare(
-        `SELECT COUNT(*) AS c, COALESCE(SUM(
-           (a.deposit_received_cents - a.deposit_refunded_cents)
-           + (a.fee_supplement_received_cents - a.fee_supplement_refunded_cents)),0) AS cents
-         FROM applications a JOIN orders o ON o.id = a.order_id
-         WHERE (a.status IN ('trial_failed','withdrawn','order_closed') OR o.status = 'cancelled')
-           AND ((a.deposit_received_cents - a.deposit_refunded_cents)
-                + (a.fee_supplement_received_cents - a.fee_supplement_refunded_cents)) > 0`,
-      )
-      .get() as { c: number; cents: number };
-    const supplementRow = this.deps.db
-      .prepare(
-        `SELECT COUNT(*) AS c, COALESCE(SUM(
-           MAX(a.agency_fee_cents - ((a.deposit_received_cents - a.deposit_refunded_cents)
-                + (a.fee_supplement_received_cents - a.fee_supplement_refunded_cents)), 0)),0) AS cents
-         FROM applications a JOIN orders o ON o.id = a.order_id
-         WHERE a.cooperation_confirmed_at IS NOT NULL
-           AND a.status IN ('trial_passed','direct_cooperation')
-           AND o.status = 'reviewing'
-           AND a.agency_fee_cents IS NOT NULL`,
-      )
-      .get() as { c: number; cents: number };
+    const pendingRefund = { count: 0, cents: 0 };
+    const pendingSupplement = { count: 0, cents: 0 };
+    const allOrders = this.deps.db.prepare('SELECT * FROM orders').all() as Row[];
+    for (const row of allOrders) {
+      const order = rowToOrder(row);
+      for (const app of this.deps.repo.listApplicationsOfOrder(order.id)) {
+        const fin = computeFinanceState(app, financeContextFor(app.status, order.status, app.id === order.currentApplicationId));
+        if (order.status !== 'completed' && fin.pendingRefundCents > 0) { pendingRefund.count++; pendingRefund.cents += fin.pendingRefundCents; }
+        if (order.status === 'reviewing' && app.id === order.currentApplicationId && (fin.pendingSupplementCents ?? 0) > 0) { pendingSupplement.count++; pendingSupplement.cents += fin.pendingSupplementCents!; }
+      }
+    }
     return {
       statusCounts,
-      pendingRefund: { count: refundRow.c, cents: refundRow.cents },
-      pendingSupplement: { count: supplementRow.c, cents: supplementRow.cents },
+      pendingRefund,
+      pendingSupplement,
       totals: {
         orders: this.deps.repo.countOrders(),
         applications: this.deps.repo.countApplications(),

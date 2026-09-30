@@ -1,9 +1,27 @@
 # 运行数据与个人资料，不入Git
 data/
+manual-acceptance-data/
+/docs/
+/tests/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+*.sqlite-journal
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# 临时工作目录与生成产物
+/tmp/
+/temp/
+/output/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
 
 # 备份与测试产物
 *.zip
@@ -16,14 +34,18 @@ coverage/
 # 依赖与构建
 node_modules/
 dist/
-tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # 日志与环境
 *.log
 logs/
 .env
 .env.local
+.env.*
+!.env.example
+!.env.template
 
 # 系统文件
 Thumbs.db
 .DS_Store
+Desktop.ini

@@ -25,7 +25,7 @@ export type TeacherGender = 'male' | 'female';
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   recruiting: '招募中',
-  reviewing: '家长挑选中',
+  reviewing: '待结算', // 保留旧存储值兼容已有数据库，只用于合作后的结算
   awaiting_trial: '待试课',
   trialing: '试课中',
   completed: '已完成',
@@ -79,10 +79,11 @@ export const LIMITS = {
   defaultImportMaxTotalBytes: 2 * 1024 * 1024 * 1024,
   defaultImportMaxEntries: 100_000,
   defaultDailyBackupsToKeep: 30,
+  maxManualBackups: 10,
   maxSafetyBackups: 10,
   safetyBackupMaxAgeDays: 30,
   backupFormatVersion: 1,
-  dbSchemaVersion: 1,
+  dbSchemaVersion: 2,
   restoreTokenTtlMs: 15 * 60 * 1000,
   cleanupDays: 90,
   cleanupIntervalMs: 24 * 60 * 60 * 1000,
@@ -106,7 +107,8 @@ export interface FinanceOperationRecord {
     | 'refund-deposit'
     | 'receive-supplement'
     | 'refund-supplement'
-    | 'correction';
+    | 'correction'
+    | 'workflow';
   payload: unknown;
   reason?: string;
   before: Record<string, number | null>;
@@ -224,7 +226,7 @@ export interface ApiErrorBody {
 
 // ------- 备份 / 恢复 -------
 
-export type BackupKind = 'daily' | 'manual' | 'pre-restore' | 'pre-cleanup';
+export type BackupKind = 'daily' | 'manual' | 'pre-restore' | 'pre-cleanup' | 'pre-delete';
 
 export interface BackupManifest {
   formatVersion: number;
@@ -251,6 +253,7 @@ export interface BackupIndexEntry {
 export interface BackupSettings {
   autoBackupDir: string | null; // null = 默认 data/backups/daily
   dailyKeepCount: number;
+  dailyBackupTime: string; // HH:mm，Asia/Hong_Kong（北京时间）
   importMaxUploadBytes: number;
   importMaxTotalBytes: number;
   importMaxEntries: number;

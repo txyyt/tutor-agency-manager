@@ -3,10 +3,11 @@ import { chromium } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 const port = 3450;
 const base = `http://127.0.0.1:${port}`;
-const dataDir = fs.mkdtempSync(path.join(process.cwd(), 'test-results', 'shot-data-'));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tam-shot-'));
 const outDir = path.join(process.cwd(), 'docs', 'screenshots');
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -82,6 +83,7 @@ try {
   const a2 = await app(order1.id, { teacherName: '刘思远', gender: 'male', wechat: 'liu_sy', phone: '13733334444' });
   // 候选2安排试课+费用+收保证金+开始试课
   const appGet = async (id) => (await (await fetch(`${base}/api/applications/${id}`, { headers })).json());
+  await fetch(`${base}/api/applications/${a2.id}/actions`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify({ action: 'recommend', version: (await appGet(a2.id)).application.version }) });
   await fetch(`${base}/api/applications/${a2.id}/actions`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify({ action: 'schedule-trial', version: (await appGet(a2.id)).application.version, orderVersion: (await (await fetch(`${base}/api/orders/${order1.id}`, { headers })).json()).order.version }) });
   await fetch(`${base}/api/applications/${a2.id}/finance`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify({ type: 'set-fees', operationId: crypto.randomUUID(), version: (await appGet(a2.id)).application.version, agencyFeeCents: 30000, depositDueCents: 10000 }) });
   await fetch(`${base}/api/applications/${a2.id}/finance`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify({ type: 'receive-deposit', operationId: crypto.randomUUID(), version: (await appGet(a2.id)).application.version, amountCents: 10000 }) });
@@ -116,14 +118,20 @@ try {
   await boxes.first().waitFor({ state: 'visible', timeout: 10_000 });
   const count = await boxes.count();
   for (let i = 0; i < count; i++) await boxes.nth(i).check();
-  await page.waitForTimeout(500);
-  await page.locator('.card', { hasText: '候选摘要' }).scrollIntoViewIfNeeded();
+  await page.getByRole('button', { name: '生成候选摘要（发家长）' }).click();
+  await page.locator('.card').filter({ has: page.getByRole('heading', { name: /候选摘要（按报名编号/ }) }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(outDir, '04-candidate-summary.png'), fullPage: false });
 
   // 5. 报名详情+费用面板
   await page.goto(`${base}/#/applications/${a2.id}`);
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: path.join(outDir, '05-application-fees.png'), fullPage: false });
+
+  await page.getByRole('button', { name: '试课通过', exact: true }).click();
+  await page.screenshot({ path: path.join(outDir, '11-trial-settlement.png'), fullPage: false });
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await page.locator('.fee-tools summary').click();
+  await page.locator('.fee-tools').screenshot({ path: path.join(outDir, '12-fee-tools.png') });
 
   // 6. 招募导出预览
   await page.goto(`${base}/#/`);
@@ -135,6 +143,7 @@ try {
   // 7. 清理预览（时间+91天制造到期完成单：先直接建一个完成单）
   const oDone = (await (await mk({ parentName: '已完成家长', parentWechat: 'done_wx', parentPhone: '13611112222' })).json()).order;
   const aD = await app(oDone.id, {});
+  await fetch(`${base}/api/applications/${aD.id}/actions`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify({ action: 'recommend', version: (await appGet(aD.id)).application.version }) });
   await fetch(`${base}/api/applications/${aD.id}/actions`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify({ action: 'schedule-trial', version: (await appGet(aD.id)).application.version, orderVersion: (await (await fetch(`${base}/api/orders/${oDone.id}`, { headers })).json()).order.version }) });
   await fetch(`${base}/api/applications/${aD.id}/finance`, { method: 'POST', headers: h({ 'Content-Type': 'application/json' }), body: JSON.stringify({ type: 'set-fees', operationId: crypto.randomUUID(), version: (await appGet(aD.id)).application.version, agencyFeeCents: 0, depositDueCents: 0 }) });
   const odD = (await (await fetch(`${base}/api/orders/${oDone.id}`, { headers })).json()).order;

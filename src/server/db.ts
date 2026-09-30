@@ -33,7 +33,7 @@ function migrationFiles(migrationDir: string): Array<{ version: number; file: st
 
 /** 迁移：按 user_version 顺序应用 migrations/*.sql；可重复执行。 */
 export function migrate(db: DatabaseSync, migrationDir: string): number {
-  const current = getUserVersion(db);
+  let current = getUserVersion(db);
   const files = migrationFiles(migrationDir);
   for (const m of files) {
     if (m.version <= current) continue;
@@ -46,6 +46,7 @@ export function migrate(db: DatabaseSync, migrationDir: string): number {
       db.exec(sql);
       setUserVersion(db, m.version);
       db.exec('COMMIT;');
+      current = m.version;
     } catch (err) {
       try {
         db.exec('ROLLBACK;');

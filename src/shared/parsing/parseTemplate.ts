@@ -71,7 +71,8 @@ const PARENT_FIELDS: FieldDef[] = [
   { key: 'learningSituation', label: '目前学习情况', aliases: ['目前学习情况', '学习情况'], required: true, convert: (r) => convertLongText(r, { required: true, label: '目前学习情况' }) },
   { key: 'tutoringGoal', label: '辅导目标', aliases: ['辅导目标'], required: true, convert: (r) => convertLongText(r, { required: true, label: '辅导目标' }) },
   { key: 'teachingMode', label: '上课方式', aliases: ['上课方式'], required: true, convert: convertTeachingMode },
-  { key: 'locationDetail', label: '上课区域及地点', aliases: ['上课区域及地点', '上课地点', '上课区域'], required: true, convert: (r) => convertLongText(r, { required: true, label: '上课区域及地点' }) },
+  { key: 'locationDetail', label: '上课区域及地点', aliases: ['上课区域及地点', '上课地点', '上课区域'], required: false, convert: (r) => convertLongText(r) },
+  { key: 'publicArea', label: '公开授课区域', aliases: ['公开授课区域', '公开区域'], required: false, convert: (r) => convertLongText(r) },
   { key: 'weeklySchedule', label: '每周可上课的日期和时间', aliases: scheduleAliases, required: true, convert: (r) => convertLongText(r, { required: true, label: '每周可上课的日期和时间' }) },
   { key: 'sessionsPerWeek', label: '每周上课次数', aliases: ['每周上课次数', '每周次数'], required: true, convert: convertSessionsPerWeek },
   { key: 'sessionMinutes', label: '每次上课时长', aliases: ['每次上课时长', '每次时长', '单次时长'], required: true, convert: convertSessionMinutes },
@@ -114,6 +115,10 @@ const LABEL_RE = /^(?:\d{1,2}\s*[.、．)]\s*)?([^：:]{1,24})[：:]\s*(.*)$/;
 
 const FIXED_EXPLANATIONS = new Set(
   [
+    '（线下填写内部地点；线上可留空）',
+    '（选填，内部地点不会用于群内发布；暂不想提供可先留空，试课时再询问）',
+    '（线下只填大致区域，例如城东区；线上可留空）',
+    '（线下只填大致区域，例如海淀区；线上可留空）',
     '（例如：基础薄弱、成绩中等、希望提高解题能力）',
     '（例如：巩固基础、作业辅导、考试复习）',
     '（线下先填写小区或附近地标，无需填写门牌号；线上填写“线上”）',
@@ -315,6 +320,11 @@ export function parseTemplate(kind: TemplateKind, text: string, ctx: ConvertCtx)
     if (def.key === 'orderNo') orderNo = typeof converted.value === 'string' && converted.value !== '' ? converted.value : null;
   }
 
+  if (kind === 'parent' && draft.teachingMode === 'online') {
+    delete fieldErrors.locationDetail; delete fieldErrors.publicArea;
+    draft.locationDetail = '线上'; draft.publicArea = '线上';
+  }
+
   // 占位值但字段根本没出现（如“简历附件”未出现）不提示；
   // 提示附件：文本中出现“附件”字样时说明文件未真正上传
   const resumeEntry = collected.get('resumeAttachmentNote');
@@ -394,7 +404,7 @@ export function parentDraftToForm(draft: Record<string, unknown>): Record<string
     tutoringGoal: draft.tutoringGoal ?? '',
     teachingMode: draft.teachingMode ?? '',
     locationDetail: draft.locationDetail ?? '',
-    publicArea: '',
+    publicArea: draft.publicArea ?? '',
     weeklySchedule: draft.weeklySchedule ?? '',
     publicSchedule: draft.weeklySchedule ?? '', // 默认与内部一致，操作人可修改
     sessionsPerWeek: draft.sessionsPerWeek ?? null,

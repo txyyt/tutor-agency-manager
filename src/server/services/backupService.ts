@@ -20,6 +20,7 @@ const KIND_TAGS: Record<BackupKind, string> = {
   manual: 'manual',
   'pre-restore': 'safety-prerestore',
   'pre-cleanup': 'safety-precleanup',
+  'pre-delete': 'safety-predelete',
 };
 
 function kindDir(paths: DataPaths, settingsAutoDir: string | null, kind: BackupKind): string {
@@ -214,7 +215,7 @@ export class BackupService {
     }
   }
 
-  /** 轮换：日备份保留N份；安全备份最多10份且≤30天；手动导出不自动删除。只轮换登记在册的包。 */
+  /** 轮换：日备份保留N份；安全备份最多10份且≤30天；手动备份最近10份。只轮换登记在册的包。 */
   rotate(kind: BackupKind, dailyKeepCount: number): void {
     const index = this.readIndex();
     const now = this.deps.clock.iso();
@@ -224,9 +225,11 @@ export class BackupService {
         .filter((e) => e.kind === 'daily')
         .sort((a, b) => (a.createdAtUtc < b.createdAtUtc ? 1 : -1));
       toDelete = dailies.slice(Math.max(dailyKeepCount, 1));
-    } else if (kind === 'pre-restore' || kind === 'pre-cleanup') {
+    } else if (kind === 'manual') {
+      toDelete = index.filter(e => e.kind === 'manual').sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc)).slice(LIMITS.maxManualBackups);
+    } else if (kind === 'pre-restore' || kind === 'pre-cleanup' || kind === 'pre-delete') {
       const safes = index
-        .filter((e) => e.kind === 'pre-restore' || e.kind === 'pre-cleanup')
+        .filter((e) => e.kind === 'pre-restore' || e.kind === 'pre-cleanup' || e.kind === 'pre-delete')
         .sort((a, b) => (a.createdAtUtc < b.createdAtUtc ? 1 : -1));
       const ageCutoff = new Date(new Date(now).getTime() - LIMITS.safetyBackupMaxAgeDays * 24 * 3600 * 1000).toISOString();
       const byAge = safes.filter((e) => e.createdAtUtc < ageCutoff);
@@ -286,8 +289,12 @@ export class BackupService {
     }
   }
 
-  updateSettings(patch: { dailyKeepCount?: number; autoBackupDir?: string | null }): { ok: true } {
+  updateSettings(patch: { dailyKeepCount?: number; dailyBackupTime?: string; autoBackupDir?: string | null }): { ok: true } {
+    if (patch.dailyBackupTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.dailyBackupTime)) {
+      throw badRequest('INVALID_SETTING', '每日备份时间须为HH:mm（00:00—23:59）');
+    }
     const cfg = this.deps.runtime.load();
+    if (patch.dailyBackupTime !== undefined) cfg.backupSettings.dailyBackupTime = patch.dailyBackupTime;
     if (patch.dailyKeepCount !== undefined) {
       if (!Number.isInteger(patch.dailyKeepCount) || patch.dailyKeepCount < 1) {
         throw badRequest('INVALID_SETTING', '日备份保留份数必须是正整数');

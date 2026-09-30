@@ -1,10 +1,11 @@
 // 报名录入：全局粘贴（按订单编号定位）或指定订单。老师无授课区域字段。
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import { CopyButton, ErrorAlert, Field, TextBlock } from '../components/ui';
 import { centsToYuanString, yuanStringToCents } from '../../shared/money';
 import { TEACHER_TEMPLATE } from '../../shared/templates';
 import type { TemplateParseResult } from '../../shared/parsing/parseTemplate';
+import { ORDER_STATUS_LABELS } from '../../shared/types';
 import type { ApplicationRecord, OrderRecord } from '../../shared/types';
 
 type ParseResponse = TemplateParseResult & {
@@ -33,6 +34,8 @@ const EMPTY: FormState = {
 
 export default function ApplicationForm({ navigate, orderId, applicationId, autoPaste }: { navigate: (to: string) => void; orderId?: number; applicationId?: number; autoPaste?: boolean }) {
   void autoPaste; // 从订单页跳转时带 paste=1；粘贴区默认展开，无需额外处理
+  const creationRequestId = useRef(crypto.randomUUID());
+  const [files, setFiles] = useState<File[]>([]);
   const editing = Boolean(applicationId);
   const fixedOrder = Boolean(orderId) || editing;
   const [version, setVersion] = useState<number | null>(null);
@@ -100,6 +103,7 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
       trialConstraints: str(d.trialConstraints),
       notes: str(d.notes),
     });
+    requestAnimationFrame(() => { document.querySelector('form')?.setAttribute('data-dirty', 'true'); });
     setFieldErrors(r.fieldErrors);
     if (r.orderInfo && !fixedOrder) {
       setTargetOrder({
@@ -155,24 +159,27 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
         strengthsAndPlan: form.strengthsAndPlan,
         availableSchedule: form.availableSchedule,
         earliestStartDate: form.earliestStartDate || null,
-        acceptsOrderPay: accepts,
+        acceptsOrderPay: form.acceptsOrderPay === '' ? undefined : accepts,
         expectedHourlyPayCents: accepts ? null : form.expectedHourlyPay.trim() === '' ? null : yuanStringToCents(form.expectedHourlyPay),
-        canAttendTrial: form.canAttendTrial === 'yes',
+        canAttendTrial: form.canAttendTrial === '' ? undefined : form.canAttendTrial === 'yes',
         trialConstraints: form.trialConstraints,
         notes: form.notes,
-        creationRequestId: crypto.randomUUID(),
+        creationRequestId: creationRequestId.current,
       };
       if (parseResult) payload.sourceTemplateText = parseResult.sourceText ?? pasteText;
       if (editing) {
-        await api.patch(`/api/applications/${applicationId}`, { ...payload, version });
+        const fd = new FormData(); fd.append('payload', JSON.stringify({ ...payload, version }));
+        for (const file of files) fd.append('files', file);
+        await api.postForm(`/api/applications/${applicationId}/profile`, fd);
+        window.dispatchEvent(new CustomEvent('tam:notice', { detail: '老师资料与附件修改已保存' }));
         navigate(`/applications/${applicationId}`);
         return;
       }
-      const r = await api.post<{ application: { id: number }; duplicated: boolean; duplicateWarning: string | null }>(
-        `/api/orders/${targetOrder.id}/applications`,
-        payload,
-      );
+      const fd = new FormData(); fd.append('payload', JSON.stringify(payload));
+      for (const file of files) fd.append('files', file);
+      const r = await api.postForm<{ application: { id: number }; duplicated: boolean; duplicateWarning: string | null }>(`/api/orders/${targetOrder.id}/applications`, fd);
       if (r.duplicateWarning) setNotice(r.duplicateWarning);
+      window.dispatchEvent(new CustomEvent('tam:notice', { detail: r.duplicateWarning || '报名资料与附件已保存' }));
       navigate(`/applications/${r.application.id}`);
     } catch (err) {
       if (err instanceof ApiError && err.fieldErrors) setFieldErrors(err.fieldErrors);
@@ -182,14 +189,13 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
     }
   };
 
-  const orderStatusBad = !editing && targetOrder && !['recruiting', 'reviewing', 'awaiting_trial', 'trialing'].includes(targetOrder.status);
+  const orderStatusBad = !editing && targetOrder && !['recruiting', 'awaiting_trial', 'trialing'].includes(targetOrder.status);
   const orderMismatched = parseResult?.orderInfo && targetOrder && parseResult.orderInfo.orderNo !== targetOrder.orderNo;
 
   return (
     <>
       <div className="card">
         <h2>{editing ? '编辑老师资料' : '老师报名录入（微信、电话必填）'}</h2>
-        <ErrorAlert error={error} />
         {notice && <div className="alert warn">{notice}</div>}
         {!fixedOrder && (
           <>
@@ -210,8 +216,8 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
           <div className={`alert ${orderStatusBad ? 'error' : 'info'}`}>
             报名订单：{targetOrder.orderNo}
             {editing ? ' — 修改本次报名的资料' : orderStatusBad
-              ? ` — 当前状态为“${targetOrder.status}”，不能接收报名`
-              : targetOrder.status === 'recruiting' || targetOrder.status === 'reviewing'
+              ? ` — 当前状态为“${ORDER_STATUS_LABELS[targetOrder.status]}”，不能接收报名`
+              : targetOrder.status === 'recruiting'
                 ? ' — 可接收候选报名（不会自动改变订单进度）'
                 : ' — 可接收候选报名'}
             {orderMismatched && <div style={{ color: 'var(--danger)' }}>粘贴原文中的订单编号与该订单不一致，请重新粘贴或更换订单。</div>}
@@ -231,7 +237,7 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
           <button type="button" className="btn primary" disabled={parsing || !pasteText.trim()} onClick={doParse}>
             {parsing ? '解析中…' : '解析并填入表单'}
           </button>
-          <CopyButton text={TEACHER_TEMPLATE} label="复制空白模板" />
+          <CopyButton text={targetOrder ? TEACHER_TEMPLATE.replace('1. 报名订单编号：', `1. 报名订单编号：${targetOrder.orderNo}`) : TEACHER_TEMPLATE} label="复制空白模板" />
         </div>
         {pasteError && <div className="alert error" style={{ marginTop: 10 }}>{pasteError}</div>}
         {parseResult && (
@@ -249,7 +255,7 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
                 {parseResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             )}
-            <div className="alert warn" style={{ marginTop: 8 }}>文本中提到附件不代表文件已上传，保存后请在报名详情页上传简历（PDF/JPG/PNG，最多5个、每个10MB）。</div>
+            <div className="alert warn" style={{ marginTop: 8 }}>文本中提到附件不代表文件已上传，请在下方报名表单选择简历文件，与资料一起保存（PDF/JPG/PNG，最多5个、每个10MB）。</div>
             {parseResult.sourceText && (
               <details>
                 <summary style={{ cursor: 'pointer', color: 'var(--muted)' }}>查看原文（保存后随记录保存）</summary>
@@ -260,7 +266,7 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
         )}
       </div>}
 
-      <form className="card" onSubmit={submit}>
+      <form onChange={(e) => { e.currentTarget.dataset.dirty = 'true'; }} className="card" onSubmit={submit}>
         <h2>报名表单</h2>
         <ErrorAlert error={error} />
         <h3>【基本信息】</h3>
@@ -340,8 +346,12 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
             <textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
           </Field>
         </div>
+        <h3>简历附件（选填）</h3>
+        <p className="hint">PDF/JPG/PNG，最多5个，每个10MB。文件会与报名资料一起保存，失败时保留填写内容。</p>
+        <input aria-label="报名简历附件" type="file" multiple accept=".pdf,.jpg,.jpeg,.png" onChange={e => setFiles(Array.from(e.target.files ?? []))} />
+        {files.length > 0 && <ul>{files.map((f, i) => <li key={i}>{f.name} <button type="button" className="btn small" onClick={() => setFiles(old => old.filter((_, index) => i !== index))}>移除</button></li>)}</ul>}
         <div className="btn-row">
-          <button type="submit" className="btn primary" disabled={saving || !targetOrder || Boolean(orderStatusBad)}>
+          <button type="submit" className="btn primary" disabled={saving || !targetOrder || Boolean(orderStatusBad) || Boolean(orderMismatched)}>
             {saving ? '保存中…' : editing ? '保存修改' : '保存报名（状态：已报名）'}
           </button>
           <button type="button" className="btn" onClick={() => navigate(editing ? `/applications/${applicationId}` : fixedOrder ? `/orders/${orderId}` : '/')}>取消</button>

@@ -64,13 +64,14 @@ export class Scheduler {
     const nowIso = this.deps.clock.iso();
     const hk = hkPartsFromUtc(nowIso);
     const today = hkDateString(nowIso);
-    const pastTwoAm = hk.hour > 2 || (hk.hour === 2 && hk.minute >= 0);
+    const [hour = 20, minute = 0] = cfg.backupSettings.dailyBackupTime.split(':').map(Number);
+    const pastScheduledTime = hk.hour * 60 + hk.minute >= hour * 60 + minute;
     const doneToday = cfg.dailyBackup.lastSuccessDateHk === today;
     const lastAttempt = cfg.dailyBackup.lastAttemptAtUtc
       ? new Date(cfg.dailyBackup.lastAttemptAtUtc).getTime()
       : 0;
     const retryDue = this.deps.clock.now().getTime() - lastAttempt >= 5 * 60 * 1000;
-    if ((onStartup || pastTwoAm || cfg.dailyBackup.lastError !== null) && !doneToday && retryDue) {
+    if ((onStartup || pastScheduledTime || cfg.dailyBackup.lastError !== null) && !doneToday && retryDue) {
       await this.runDailyBackup(nowIso, today);
     }
   }
@@ -130,7 +131,7 @@ export class Scheduler {
         lastSuccessAtUtc: cfg.dailyBackup.lastSuccessAtUtc,
         lastError: cfg.dailyBackup.lastError,
         lastAttemptAtUtc: cfg.dailyBackup.lastAttemptAtUtc,
-        dueNow: (hk.hour > 2 || hk.hour === 2) && cfg.dailyBackup.lastSuccessDateHk !== today,
+        dueNow: hk.hour * 60 + hk.minute >= Number(cfg.backupSettings.dailyBackupTime.slice(0, 2)) * 60 + Number(cfg.backupSettings.dailyBackupTime.slice(3)) && cfg.dailyBackup.lastSuccessDateHk !== today,
       },
       cleanup: {
         lastRunAtUtc: cfg.cleanupState.lastRunAtUtc,

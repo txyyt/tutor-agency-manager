@@ -17,6 +17,7 @@ interface BackupsResponse {
   settings: {
     autoBackupDir: string | null;
     dailyKeepCount: number;
+    dailyBackupTime: string;
     importMaxUploadBytes: number;
     importMaxTotalBytes: number;
     importMaxEntries: number;
@@ -41,6 +42,7 @@ const KIND_LABELS: Record<string, string> = {
   daily: '每日自动',
   manual: '手动',
   'pre-restore': '恢复前安全备份',
+  'pre-delete': '删除前安全备份',
   'pre-cleanup': '清理前安全备份',
 };
 
@@ -50,12 +52,14 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState('');
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
-  const [settings, setSettings] = useState({ autoBackupDir: '', dailyKeepCount: '30', importMaxUploadMB: '1024', importMaxTotalMB: '2048' });
+  const [settings, setSettings] = useState({ autoBackupDir: '', dailyKeepCount: '30', dailyBackupTime: '20:00', importMaxUploadMB: '1024', importMaxTotalMB: '2048' });
   const [restoreToken, setRestoreToken] = useState<string | null>(null);
   const [restorePreview, setRestorePreview] = useState<RestorePreview | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const restoreFileRef = useRef<HTMLInputElement>(null);
   const [restoreFileName, setRestoreFileName] = useState('');
+  const [selectedBackupId, setSelectedBackupId] = useState('');
+  const restorePanelRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -65,6 +69,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
       setSettings({
         autoBackupDir: b.settings.autoBackupDir ?? '',
         dailyKeepCount: String(b.settings.dailyKeepCount),
+        dailyBackupTime: b.settings.dailyBackupTime,
         importMaxUploadMB: String(Math.round(b.settings.importMaxUploadBytes / 1024 / 1024)),
         importMaxTotalMB: String(Math.round(b.settings.importMaxTotalBytes / 1024 / 1024)),
       });
@@ -108,6 +113,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
       await api.patch('/api/backups/settings', {
         autoBackupDir: settings.autoBackupDir.trim() === '' ? null : settings.autoBackupDir.trim(),
         dailyKeepCount: Number(settings.dailyKeepCount),
+        dailyBackupTime: settings.dailyBackupTime,
         importMaxUploadBytes: Number(settings.importMaxUploadMB) * 1024 * 1024,
         importMaxTotalBytes: Number(settings.importMaxTotalMB) * 1024 * 1024,
       });
@@ -118,18 +124,25 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
     }
   };
 
-  const validateRestore = async (file: File) => {
+  const validateRestore = async (source: File | BackupIndexEntry) => {
     setError(null);
     setRestoreToken(null);
     setRestorePreview(null);
+    setRestoreBusy(true);
+    setRestoreFileName(source instanceof File ? source.name : source.fileName);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const r = await api.postForm<{ token: string; preview: RestorePreview }>('/api/restores/validate', fd);
+      let r: { token: string; preview: RestorePreview };
+      if (source instanceof File) {
+        const fd = new FormData(); fd.append('file', source);
+        r = await api.postForm('/api/restores/validate', fd);
+      } else r = await api.post('/api/restores/validate-existing', { backupId: source.id });
       setRestoreToken(r.token);
       setRestorePreview(r.preview);
+      requestAnimationFrame(() => restorePanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     } catch (e) {
       setError(e);
+    } finally {
+      setRestoreBusy(false);
     }
   };
 
@@ -155,7 +168,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
         <h2>90天自动清理</h2>
         <div className="alert info">
           规则：按“最后实际修改”满90天清理（查看/导出/下载不延期）。仅完成/取消订单且全部关联报名到期、费用结清/退清才整单删除；
-          失败/退出报名到期且无待退、未被引用可独立删除；在办订单（招募/挑选/待试课/试课/暂停）始终保护。
+          失败/退出报名到期且无待退、未被引用可独立删除；在办订单（招募/待试课/试课/待结算/暂停）始终保护。
           每天自动执行一次并在启动时补做；确有可删数据才生成清理前备份，备份失败则暂缓删除。
           服务停止期间无法自动备份与清理，重启后补做。
         </div>
@@ -227,9 +240,9 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
       <div className="card">
         <h2>备份与恢复</h2>
         <div className="alert info">
-          每日自动备份：每天02:00（香港时间）生成一次；当天启动时如还没有当日备份会立即补做；失败5分钟后重试。
+          每日自动备份：每天{backups?.settings.dailyBackupTime ?? '20:00'}（北京时间）检查生成；软件需保持运行。当天启动时如还没有当日备份会立即补做，当天已成功则不重复；失败5分钟后重试。手动备份保留最近10份，新备份成功后清理超出的旧包。
           默认保留最近30份日备份（可调整）。恢复前/清理前安全备份单独保留最多10份且不超过30天。
-          手动导出的备份不会自动删除。本地备份防误操作和文件损坏；建议定期把导出包另存到其他磁盘/U盘防电脑故障。
+          已下载到其他位置的副本不受保留规则影响。本地备份防误操作和文件损坏；建议定期把导出包另存到其他磁盘/U盘防电脑故障。
           本系统不自动上传云端。
         </div>
         {backups && (
@@ -253,10 +266,13 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
               <Field label="日备份保留份数（正整数，默认30）">
                 <input type="number" min={1} value={settings.dailyKeepCount} onChange={(e) => setSettings((s) => ({ ...s, dailyKeepCount: e.target.value }))} />
               </Field>
-              <Field label="导入上传上限（MB）">
+              <Field label="每日备份时间（北京时间）" hint="默认20:00，保存后生效；当天启动补做的备份也计入每日一次。">
+                <input aria-label="每日备份时间（北京时间）" type="time" value={settings.dailyBackupTime} onChange={e => setSettings(s => ({ ...s, dailyBackupTime: e.target.value }))} />
+              </Field>
+              <Field label="导入上传上限（MB）" hint="上传的备份ZIP文件本身允许的最大大小。">
                 <input type="number" min={1} value={settings.importMaxUploadMB} onChange={(e) => setSettings((s) => ({ ...s, importMaxUploadMB: e.target.value }))} />
               </Field>
-              <Field label="导入解压总量上限（MB）">
+              <Field label="导入解压总量上限（MB）" hint="ZIP解压后，数据库和全部附件合计允许的最大大小。">
                 <input type="number" min={1} value={settings.importMaxTotalMB} onChange={(e) => setSettings((s) => ({ ...s, importMaxTotalMB: e.target.value }))} />
               </Field>
             </div>
@@ -300,27 +316,37 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
         )}
       </div>
 
-      <div className="card">
+      <div className="card" ref={restorePanelRef}>
         <h2>从备份包恢复</h2>
         <div className="alert warn">
           恢复语义：<strong>替换</strong>当前全部订单、报名与附件到备份时点，不合并、不追加。备份之后新增/修改的数据将被替换。
           恢复前系统自动备份当前数据（失败则终止）。恢复后编号从“本机已发编号与备份编号较大值”之后继续，不会复用已发微信群的编号。
         </div>
+        <Field label="从已有备份中选择" full>
+          <select aria-label="从已有备份中选择" value={selectedBackupId} disabled={restoreBusy} onChange={e => { setSelectedBackupId(e.target.value); setRestoreToken(null); setRestorePreview(null); setRestoreFileName(''); }}>
+            <option value="">请选择备份</option>
+            {[...(backups?.entries ?? [])].sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc)).map(e => <option key={e.id} value={e.id}>{KIND_LABELS[e.kind]} · {formatHkDateTimeCn(e.createdAtUtc)} · {e.fileName}</option>)}
+          </select>
+        </Field>
+        <div className="btn-row" style={{ marginBottom: 18 }}><button type="button" className="btn" disabled={restoreBusy || !selectedBackupId} onClick={() => { const entry = backups?.entries.find(e => e.id === selectedBackupId); if (entry) void validateRestore(entry); }}>校验所选备份</button></div>
+        <p className="hint">也可以选择电脑上的备份ZIP。两种方式都须先校验，再确认替换当前数据。</p>
         <div className="filter-bar">
           <input
             ref={restoreFileRef}
             type="file"
+            disabled={restoreBusy}
             accept=".zip"
             style={{ display: 'none' }}
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) {
+                setSelectedBackupId('');
                 setRestoreFileName(f.name);
                 void validateRestore(f);
               }
             }}
           />
-          <button type="button" className="btn" onClick={() => restoreFileRef.current?.click()}>选择备份包（ZIP）</button>
+          <button type="button" className="btn" disabled={restoreBusy} onClick={() => restoreFileRef.current?.click()}>选择备份包（ZIP）</button>
           {restoreFileName && <span>已选择：{restoreFileName}</span>}
         </div>
         <ErrorAlert error={error} />

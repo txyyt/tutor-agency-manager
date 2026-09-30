@@ -40,6 +40,7 @@ export class RuntimeConfigStore {
         backupSettings: {
           autoBackupDir: raw.backupSettings?.autoBackupDir ?? null,
           dailyKeepCount: raw.backupSettings?.dailyKeepCount ?? LIMITS.defaultDailyBackupsToKeep,
+          dailyBackupTime: raw.backupSettings?.dailyBackupTime ?? '20:00',
           importMaxUploadBytes:
             raw.backupSettings?.importMaxUploadBytes ?? LIMITS.defaultImportMaxUploadBytes,
           importMaxTotalBytes:
@@ -62,6 +63,7 @@ export class RuntimeConfigStore {
         backupSettings: {
           autoBackupDir: null,
           dailyKeepCount: LIMITS.defaultDailyBackupsToKeep,
+          dailyBackupTime: '20:00',
           importMaxUploadBytes: LIMITS.defaultImportMaxUploadBytes,
           importMaxTotalBytes: LIMITS.defaultImportMaxTotalBytes,
           importMaxEntries: LIMITS.defaultImportMaxEntries,

@@ -4,7 +4,8 @@ import multer from 'multer';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
+import { tx } from '../transaction.js';
 import {
   LIMITS,
   type ApplicationRecord,
@@ -254,6 +255,9 @@ export function createApp(svc: Services): Express {
         grade: typeof q.grade === 'string' && q.grade ? q.grade : undefined,
         dateFrom: typeof q.dateFrom === 'string' && q.dateFrom ? q.dateFrom : undefined,
         dateTo: typeof q.dateTo === 'string' && q.dateTo ? q.dateTo : undefined,
+        needsAction: q.needsAction === '1',
+        sort: validate(z.enum(['updated-desc', 'updated-asc', 'number-desc', 'number-asc']).default('updated-desc'), q.sort),
+        tasksFirst: q.tasksFirst !== '0',
         page: Number(q.page ?? 1) || 1,
         pageSize: Number(q.pageSize ?? 20) || 20,
       }),
@@ -297,28 +301,40 @@ export function createApp(svc: Services): Express {
     res.json(result);
   });
 
-  app.post('/api/orders/:id/applications', (req, res) => {
-    const body = validate(applicationCreateSchema, req.body);
-    const orderId = Number(req.params.id);
-    // 防止粘贴原文订单编号与详情订单不一致时静默关联
-    if (body.sourceTemplateText) {
-      const parsedNo = extractOrderNoFromText(body.sourceTemplateText);
-      if (parsedNo) {
-        const order = svc.orders.getOrder(orderId);
-        if (parsedNo !== order.orderNo) {
-          throw conflict(
-            'ORDER_NO_MISMATCH',
-            `粘贴原文中的订单编号（${parsedNo}）与本订单（${order.orderNo}）不一致，已阻止保存。请重新粘贴或选择正确订单`,
-          );
+  const registrationUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: LIMITS.maxAttachmentBytes, files: LIMITS.maxAttachmentsPerApplication } });
+  function checkUploadGeneration(req: Request): void {
+    if (svc.maintenance.isHeld || !svc.active.isOpen) throw new AppError(503, 'MAINTENANCE', '正在执行数据维护，本次资料尚未保存');
+    if (req.headers['x-data-epoch'] !== String(svc.runtime.load().dataEpoch)) throw conflict('DATA_EPOCH_CONFLICT', '数据已恢复，请刷新后重新保存');
+  }
+  function uploadedFiles(req: Request): UploadedFile[] {
+    return (req.files as Express.Multer.File[] ?? []).map(f => ({ fieldName: f.fieldname, originalName: Buffer.from(f.originalname, 'latin1').toString('utf8'), mimeType: f.mimetype, size: f.size, buffer: f.buffer }));
+  }
+  app.post('/api/orders/:id/applications', (req, res, next) => {
+    const save = () => {
+      try {
+        checkUploadGeneration(req);
+        const input = req.is('multipart/form-data') ? JSON.parse(String(req.body?.payload ?? '{}')) : req.body;
+        const body = validate(applicationCreateSchema, input);
+        const orderId = Number(req.params.id);
+        if (body.sourceTemplateText) {
+          const parsedNo = extractOrderNoFromText(body.sourceTemplateText);
+          const order = svc.orders.getOrder(orderId);
+          if (parsedNo && parsedNo !== order.orderNo) throw conflict('ORDER_NO_MISMATCH', `粘贴原文中的订单编号（${parsedNo}）与本订单（${order.orderNo}）不一致，已阻止保存`);
         }
+        const result = tx(svc.active.proxy, () => {
+          const created = svc.applications.createApplication(orderId, body, body);
+          const files = uploadedFiles(req);
+          if (files.length && !created.duplicated) created.application = svc.attachments.upload(created.application.id, files, created.application.version).application;
+          return created;
+        });
+        svc.onRecordChanged();
+        res.status(result.duplicated ? 200 : 201).json(result);
+      } catch (error) {
+        next(error instanceof SyntaxError ? badRequest('VALIDATION_FAILED', '报名资料格式无效') : error);
       }
-    }
-    const result = svc.applications.createApplication(orderId, body, {
-      sourceTemplateText: body.sourceTemplateText ?? null,
-      creationRequestId: body.creationRequestId ?? null,
-    });
-    svc.onRecordChanged();
-    res.status(result.duplicated ? 200 : 201).json(result);
+    };
+    if (req.is('multipart/form-data')) registrationUpload.array('files')(req, res, err => err ? next(mapMulterError(err)) : save());
+    else save();
   });
 
   app.post('/api/orders/:id/recommendations', (req, res) => {
@@ -370,6 +386,25 @@ export function createApp(svc: Services): Express {
     res.json(result);
   });
 
+  app.post('/api/applications/:id/profile', (req, res, next) => {
+    registrationUpload.array('files')(req, res, err => {
+      if (err) return next(mapMulterError(err));
+      try {
+        checkUploadGeneration(req);
+        const input = JSON.parse(String(req.body?.payload ?? '{}'));
+        const body = validate(applicationUpdateSchema, input);
+        if (!Number.isInteger(input.version)) throw badRequest('VALIDATION_FAILED', '缺少资料版本');
+        const result = tx(svc.active.proxy, () => {
+          const r = svc.applications.updateGeneral(Number(req.params.id), body, input.version);
+          const files = uploadedFiles(req);
+          if (files.length) r.application = svc.attachments.upload(r.application.id, files, r.application.version).application;
+          return r;
+        });
+        res.json(result);
+      } catch (error) { next(error instanceof SyntaxError ? badRequest('VALIDATION_FAILED', '资料格式无效') : error); }
+    });
+  });
+
   app.post('/api/applications/:id/actions', (req, res) => {
     const body = validate(applicationActionSchema, req.body);
     const result = svc.applications.applicationAction(Number(req.params.id), body.action, body, body.version);
@@ -394,6 +429,127 @@ export function createApp(svc: Services): Express {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.send(buildFeeNotice(app, order.orderNo));
   });
+
+  // 合并业务操作：一次确认、一组事务；重试相同操作ID不会重复收款或重复安排。
+  const workflowSchema = z.object({
+    action: z.enum(['schedule', 'prepare', 'receive-start', 'start', 'pass', 'fail', 'withdraw', 'direct', 'settle', 'refund', 'complete']),
+    operationId: z.string().uuid(), version: z.number().int(), orderVersion: z.number().int(),
+    agencyFeeCents: z.number().int().min(0).optional(), depositDueCents: z.number().int().min(0).optional(),
+    amountCents: z.number().int().min(0).optional(),
+  });
+  app.post('/api/applications/:id/workflow', (req, res) => {
+    const body = validate(workflowSchema, req.body);
+    const id = Number(req.params.id);
+    const { version, orderVersion, ...payload } = body;
+    const result = tx(svc.active.proxy, () => {
+      let application = svc.applications.getApplication(id);
+      let order = svc.orders.getOrder(application.orderId);
+      const old = application.financeOperations.find(o => o.operationId === body.operationId);
+      if (old) {
+        if (old.type !== 'workflow' || JSON.stringify(old.payload) !== JSON.stringify(payload)) throw conflict('OPERATION_ID_CONFLICT', '操作ID已用于其他内容');
+        return { application, order, message: '该操作已保存，未重复执行', replayed: true };
+      }
+      if (application.version !== version || order.version !== orderVersion) throw conflict('VERSION_CONFLICT', '资料或订单已变化，请刷新后重试');
+      const action = (name: string) => {
+        const r = svc.applications.applicationAction(id, name, { orderVersion: order.version }, application.version);
+        application = r.application; order = r.order;
+      };
+      const finance = (type: 'set-fees' | 'receive-deposit' | 'receive-supplement' | 'refund-deposit' | 'refund-supplement', amountCents?: number) => {
+        application = svc.applications.financeOperation(id, { type, operationId: crypto.randomUUID(), amountCents, agencyFeeCents: body.agencyFeeCents, depositDueCents: body.depositDueCents }, application.version).application;
+      };
+      let completionMessage = '';
+      const tryComplete = () => {
+        order = svc.orders.getOrder(order.id);
+        if (order.status !== 'reviewing' || !order.currentApplicationId) return;
+        try { order = svc.orders.orderAction(order.id, 'complete', {}, order.version).order; }
+        catch (error) {
+          if (!(error instanceof AppError) || error.code !== 'COMPLETION_BLOCKED') throw error;
+          completionMessage = error.message;
+        }
+      };
+      if (['prepare', 'receive-start', 'start', 'settle', 'complete'].includes(body.action) && order.currentApplicationId !== id) throw conflict('STATE_CONFLICT', '请操作本单当前老师');
+      switch (body.action) {
+        case 'schedule':
+          action('schedule-trial'); finance('set-fees');
+          if ((body.amountCents ?? 0) > 0) finance('receive-deposit', body.amountCents);
+          break;
+        case 'prepare':
+          if (order.status !== 'awaiting_trial') throw conflict('STATE_CONFLICT', '只能在待试课阶段登记保证金');
+          finance('set-fees'); if ((body.amountCents ?? 0) > 0) finance('receive-deposit', body.amountCents); break;
+        case 'receive-start': {
+          if (order.status !== 'awaiting_trial') throw conflict('STATE_CONFLICT', '只能在待试课阶段确认保证金');
+          if ((body.amountCents ?? 0) <= 0) throw conflict('INVALID_AMOUNT', '请填写实际收到的保证金金额');
+          finance('receive-deposit', body.amountCents);
+          if (financeOf(application, order).pendingDepositCents === 0) {
+            order = svc.orders.orderAction(order.id, 'start-trial', {}, order.version).order;
+            completionMessage = '保证金已收齐，试课已开始';
+          } else completionMessage = '本次保证金已登记，收齐后开始试课';
+          break;
+        }
+        case 'start': order = svc.orders.orderAction(order.id, 'start-trial', {}, order.version).order; break;
+        case 'pass': action('pass'); if ((body.amountCents ?? 0) > 0) finance('receive-supplement', body.amountCents); tryComplete(); break;
+        case 'direct': action('direct-cooperation'); finance('set-fees'); if ((body.amountCents ?? 0) > 0) finance('receive-supplement', body.amountCents); tryComplete(); break;
+        case 'fail': action('fail'); break;
+        case 'withdraw': action('withdraw'); break;
+        case 'settle': finance('receive-supplement', body.amountCents); tryComplete(); break;
+        case 'refund': {
+          const pending = financeOf(application, order).pendingRefundCents;
+          const amount = body.amountCents ?? 0;
+          if (amount <= 0 || amount > pending) throw conflict('INVALID_AMOUNT', '本次退款必须大于0且不超过待退款金额');
+          const deposit = Math.min(amount, application.depositReceivedCents - application.depositRefundedCents);
+          if (deposit > 0) finance('refund-deposit', deposit);
+          if (amount > deposit) finance('refund-supplement', amount - deposit);
+          tryComplete(); break;
+        }
+        case 'complete': order = svc.orders.orderAction(order.id, 'complete', {}, order.version).order; break;
+      }
+      application = svc.applications.getApplication(id);
+      const record = { operationId: body.operationId, type: 'workflow', payload, before: {}, after: {}, applied: true, at: svc.clock.iso() };
+      svc.active.proxy.prepare('UPDATE applications SET finance_operations_json = ? WHERE id = ?').run(JSON.stringify([...application.financeOperations, record]), id);
+      return { application: svc.applications.getApplication(id), order, message: order.status === 'completed' ? '费用已结清，订单已完成' : completionMessage || '操作已保存', replayed: false };
+    });
+    res.json(result);
+  });
+
+  // 删除前锁内备份；未结清款项不能被删除操作抹去。
+  async function deleteRecord(req: Request, res: Response, kind: 'order' | 'application'): Promise<void> {
+    const version = Number(req.query.version);
+    if (!Number.isInteger(version)) throw badRequest('VALIDATION_FAILED', '缺少版本，请刷新重试');
+    const epoch = req.headers['x-data-epoch'];
+    await svc.maintenance.runExclusive(async () => {
+      if (epoch !== String(svc.runtime.load().dataEpoch)) throw conflict('DATA_EPOCH_CONFLICT', '数据已恢复，请刷新后重试');
+      const application = kind === 'application' ? svc.applications.getApplication(Number(req.params.id)) : null;
+      const order = svc.orders.getOrder(application?.orderId ?? Number(req.params.id));
+      const record = application ?? order;
+      if (record.version !== version) throw conflict('VERSION_CONFLICT', '记录已变化，请刷新后重试');
+      const apps = application ? [application] : svc.repo.listApplicationsOfOrder(order.id);
+      if (apps.some(a => a.id === order.currentApplicationId) && ['awaiting_trial', 'trialing'].includes(order.status)) throw conflict('DELETE_ACTIVE_TRIAL', '请先登记老师退出或取消订单，再删除正在试课的记录');
+      if (application && order.matchedApplicationId === application.id) throw conflict('DELETE_MATCHED', '成交老师关联已完成订单，请从订单详情删除整单');
+      if (apps.some(a => {
+        const f = financeOf(a, order);
+        return order.status === 'completed' ? (!f.settled || f.pendingRefundCents > 0) : f.netReceivedCents !== 0;
+      })) throw conflict('DELETE_UNSETTLED', '存在未结清款项，请先退款或完成结算，再删除');
+      const hasHistory = order.status === 'completed' || apps.some(a => a.depositReceivedCents > 0 || a.feeSupplementReceivedCents > 0 || a.financeOperations.some(o => o.type === 'correction'));
+      const no = application?.applicationNo ?? order.orderNo;
+      if (hasHistory && req.query.confirmHistory !== no) throw conflict('DELETE_CONFIRM_REQUIRED', `存在费用历史，请输入 ${no} 再次确认删除`);
+      const backup = await svc.backups.performBackupLocked('pre-delete');
+      tx(svc.active.proxy, () => {
+        if (application) {
+          if (order.currentApplicationId === application.id) svc.active.proxy.prepare("UPDATE orders SET current_application_id = NULL, status = 'recruiting', version = version + 1, updated_at = ? WHERE id = ?").run(svc.clock.iso(), order.id);
+          svc.active.proxy.prepare('DELETE FROM applications WHERE id = ?').run(application.id);
+        } else {
+          // 订单与报名双向引用：先在同一事务中解除订单指向老师的引用。
+          svc.active.proxy.prepare('UPDATE orders SET current_application_id = NULL, matched_application_id = NULL WHERE id = ?').run(order.id);
+          svc.active.proxy.prepare('DELETE FROM applications WHERE order_id = ?').run(order.id);
+          svc.active.proxy.prepare('DELETE FROM orders WHERE id = ?').run(order.id);
+        }
+      });
+      for (const a of apps) for (const file of a.attachments) svc.attachments.removeAttachmentFile(file.storagePath);
+      res.json({ deleted: true, backupId: backup.id, applicationsDeleted: apps.length });
+    });
+  }
+  app.delete('/api/orders/:id', async (req, res) => { await deleteRecord(req, res, 'order'); });
+  app.delete('/api/applications/:id', async (req, res) => { await deleteRecord(req, res, 'application'); });
 
   // ---- 附件 ----
   const uploadAttachment = multer({
@@ -492,7 +648,7 @@ export function createApp(svc: Services): Express {
           result.fieldErrors.orderNo = `订单编号“${result.orderNo}”不存在，请核对后修改`;
         } else {
           const statusLabel = ORDER_STATUS_LABELS[order.status];
-          const canApply = ['recruiting', 'reviewing', 'awaiting_trial', 'trialing'].includes(order.status);
+          const canApply = ['recruiting', 'awaiting_trial', 'trialing'].includes(order.status);
           orderInfo = { orderId: order.id, orderNo: order.orderNo, status: order.status, statusLabel, canApply };
           if (body.contextOrderId && order.id !== body.contextOrderId) {
             orderMismatch = `原文编号指向订单 ${order.orderNo}，与当前页面订单不一致`;
@@ -578,6 +734,11 @@ export function createApp(svc: Services): Express {
   });
 
   // ---- 恢复 ----
+  app.post('/api/restores/validate-existing', async (req, res) => {
+    const { backupId } = validate(z.object({ backupId: z.string().uuid() }), req.body);
+    const backup = svc.backups.getBackupFile(backupId);
+    res.json(await svc.restores.validate(backup.absolutePath));
+  });
   app.post('/api/restores/validate', (req, res, next) => {
     const limit = svc.runtime.load().backupSettings.importMaxUploadBytes;
     const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: limit, files: 1 } });

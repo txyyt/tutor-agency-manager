@@ -49,10 +49,10 @@ export class ApplicationService {
     return tx(this.deps.db, () => {
       const order = this.deps.repo.getOrderById(orderId);
       if (!order) throw notFound(`订单不存在（id=${orderId}）`);
-      if (!['recruiting', 'reviewing', 'awaiting_trial', 'trialing'].includes(order.status)) {
+      if (!['recruiting', 'awaiting_trial', 'trialing'].includes(order.status)) {
         throw conflict(
           'ORDER_NOT_ACCEPTING',
-          `订单当前状态为“${order.status}”，不能接收新报名（招募中/家长挑选中/待试课/试课中才可报名）`,
+          `订单当前状态为“${order.status}”，不能接收新报名（招募中/待试课/试课中才可报名）`,
         );
       }
       if (opts.creationRequestId) {
@@ -61,6 +61,7 @@ export class ApplicationService {
           .get(opts.creationRequestId) as { id: number } | undefined;
         if (existing) {
           const application = this.deps.repo.getApplicationById(existing.id)!;
+          if (application.orderId !== orderId) throw conflict('ORDER_NO_MISMATCH', '该报名请求已经关联其他订单');
           return { application, order, duplicated: true, duplicateWarning: null };
         }
       }
@@ -207,11 +208,11 @@ export class ApplicationService {
           if (order.currentApplicationId !== null) {
             throw conflict('CURRENT_EXISTS', '已有当前试课老师，每单同时只能安排一位。请先处理当前老师');
           }
-          if (!['recruiting', 'reviewing'].includes(order.status)) {
-            throw conflict('STATE_CONFLICT', `订单状态“${order.status}”不能安排试课（需招募中或家长挑选中）`);
+          if (!['recruiting'].includes(order.status)) {
+            throw conflict('STATE_CONFLICT', `订单状态“${order.status}”不能安排试课（需招募中）`);
           }
-          if (!['submitted', 'recommended'].includes(app.status)) {
-            throw conflict('STATE_CONFLICT', `只有“已报名/已推荐”可安排试课（当前：${app.status}）`);
+          if (app.status !== 'recommended') {
+            throw conflict('STATE_CONFLICT', `请先标记“已推荐”，再安排试课（当前：${app.status}）`);
           }
           this.updateAppRow(app.id, { status: 'awaiting_trial', trialAt: now }, now);
           this.updateOrderRow(order.id, { status: 'awaiting_trial', currentApplicationId: app.id }, now);
@@ -221,12 +222,8 @@ export class ApplicationService {
           if (order.status !== 'trialing') throw conflict('STATE_CONFLICT', `订单不在“试课中”（当前：${order.status}），不能标记试课结果`);
           if (order.currentApplicationId !== app.id) throw conflict('STATE_CONFLICT', '只能对当前试课老师登记试课结果');
           if (app.status !== 'awaiting_trial') throw conflict('STATE_CONFLICT', `报名不是“待试课”（当前：${app.status}）`);
-          if (payload.confirmCooperation === true) {
-            this.updateAppRow(app.id, { status: 'trial_passed', cooperationConfirmedAt: now }, now);
-          } else {
-            this.updateAppRow(app.id, { status: 'trial_passed' }, now);
-          }
-          // 通过后订单回到家长挑选中：显示“试课通过，待确认/待结算”，保留当前引用
+          this.updateAppRow(app.id, { status: 'trial_passed', cooperationConfirmedAt: now }, now);
+          // 通过即确认合作，保留当前老师直到费用结清
           this.updateOrderRow(order.id, { status: 'reviewing' }, now);
           break;
         }
@@ -234,7 +231,7 @@ export class ApplicationService {
           if (order.status !== 'trialing') throw conflict('STATE_CONFLICT', `订单不在“试课中”（当前：${order.status}）`);
           if (order.currentApplicationId !== app.id) throw conflict('STATE_CONFLICT', '只能对当前试课老师登记试课结果');
           if (app.status !== 'awaiting_trial') throw conflict('STATE_CONFLICT', `报名不是“待试课”（当前：${app.status}）`);
-          const target = payload.target === 'recruiting' ? 'recruiting' : 'reviewing';
+          const target = 'recruiting';
           this.updateAppRow(app.id, { status: 'trial_failed' }, now);
           this.updateOrderRow(order.id, { status: target, currentApplicationId: null }, now);
           break;
@@ -247,8 +244,8 @@ export class ApplicationService {
           const isCurrent = order.currentApplicationId === app.id;
           this.updateAppRow(app.id, { status: 'withdrawn' }, now);
           if (isCurrent) {
-            const target = payload.target === 'recruiting' ? 'recruiting' : 'reviewing';
-            const nextStatus = ['awaiting_trial', 'trialing'].includes(order.status) ? target : order.status;
+            const target = 'recruiting';
+            const nextStatus = ['awaiting_trial', 'trialing', 'reviewing'].includes(order.status) ? target : order.status;
             this.updateOrderRow(order.id, { currentApplicationId: null, status: nextStatus }, now);
           }
           break;
@@ -262,14 +259,14 @@ export class ApplicationService {
           break;
         }
         case 'direct-cooperation': {
-          if (!['recruiting', 'reviewing'].includes(order.status)) {
-            throw conflict('STATE_CONFLICT', `订单状态“${order.status}”不能直接合作（需招募中或家长挑选中）`);
+          if (!['recruiting'].includes(order.status)) {
+            throw conflict('STATE_CONFLICT', `订单状态“${order.status}”不能直接合作（需招募中）`);
           }
           if (order.currentApplicationId !== null) {
             throw conflict('CURRENT_EXISTS', '已有当前试课/待结算老师，不能重复直接合作');
           }
-          if (!['submitted', 'recommended'].includes(app.status)) {
-            throw conflict('STATE_CONFLICT', `只有“已报名/已推荐”可直接合作（当前：${app.status}）`);
+          if (app.status !== 'recommended') {
+            throw conflict('STATE_CONFLICT', `请先标记“已推荐”，再直接合作（当前：${app.status}）`);
           }
           this.updateAppRow(app.id, { status: 'direct_cooperation', cooperationConfirmedAt: now }, now);
           this.updateOrderRow(order.id, { status: 'reviewing', currentApplicationId: app.id }, now);

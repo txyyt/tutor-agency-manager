@@ -18,7 +18,7 @@ export function Field(props: {
   full?: boolean;
 }) {
   return (
-    <div className={`field ${props.full ? 'full' : ''}`}>
+    <div className={`field ${props.error ? 'has-error' : ''} ${props.full ? 'full' : ''}`}>
       <label>
         {props.label}
         {props.required && <span className="req">*</span>}
@@ -94,15 +94,12 @@ export function ConfirmButton(props: {
       </button>
       {open && (
         <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 100,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-          }}
+          className="modal-backdrop"
           onClick={(e) => {
             if (e.target === e.currentTarget && !busy) setOpen(false);
           }}
         >
-          <div style={{ background: 'var(--card)', borderRadius: 10, padding: 20, maxWidth: 480, width: '100%' }}>
+          <div className="modal-panel" role="dialog" aria-modal="true" aria-label={props.confirmTitle}>
             <h3 style={{ marginTop: 0 }}>{props.confirmTitle}</h3>
             <div style={{ fontSize: 13 }}>{props.confirmBody}</div>
             {error && <div className="alert error" style={{ marginTop: 10 }}>{error}</div>}
@@ -160,10 +157,19 @@ export function Pagination(props: { page: number; pageSize: number; total: numbe
 }
 
 export function ErrorAlert({ error }: { error: unknown }) {
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => {
+      const field = document.querySelector<HTMLElement>('.has-error');
+      field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      field?.querySelector<HTMLElement>('input,select,textarea')?.focus({ preventScroll: true });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [error]);
   if (!error) return null;
   const e = error as { message?: string; fieldErrors?: Record<string, string> };
   return (
-    <div className="alert error">
+    <div className="alert error error-toast" role="alert">
       {e.message ?? String(error)}
       {e.fieldErrors && (
         <pre>

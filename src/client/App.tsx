@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ensureSession } from './api';
 import { useHashRoute } from './components/ui';
 import Dashboard from './pages/Dashboard';
@@ -7,9 +7,28 @@ import OrderDetail from './pages/OrderDetail';
 import ApplicationForm from './pages/ApplicationForm';
 import ApplicationDetail from './pages/ApplicationDetail';
 import Maintenance from './pages/Maintenance';
+import Icon, { type IconName } from './components/Icon';
 
 export default function App() {
   const { path, navigate } = useHashRoute();
+  const history = useRef<string[]>([]);
+  const previousPath = useRef(path);
+  useEffect(() => {
+    if (previousPath.current !== path) { history.current.push(previousPath.current); previousPath.current = path; }
+  }, [path]);
+  const goBack = () => {
+    if (document.querySelector('form[data-dirty="true"]') && !window.confirm('有未保存的资料，确定返回并放弃修改？')) return;
+    const prior = history.current.pop();
+    const fallback = /^\/orders\/\d+\/(edit|apply)/.test(path) ? path.split('/').slice(0, 3).join('/') : /^\/applications\/\d+\/edit/.test(path) ? path.replace(/\/edit$/, '') : base.startsWith('/applications/') ? document.querySelector<HTMLAnchorElement>('a.btn[href^="#/orders/"]')?.getAttribute('href')?.slice(1) ?? '/' : '/';
+    previousPath.current = prior ?? fallback; navigate(prior ?? fallback);
+  };
+  const [toast, setToast] = useState('');
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const show = (e: Event) => { setToast((e as CustomEvent<string>).detail); clearTimeout(timer); timer = setTimeout(() => setToast(''), 7000); };
+    window.addEventListener('tam:notice', show);
+    return () => { window.removeEventListener('tam:notice', show); clearTimeout(timer); };
+  }, []);
   const [ready, setReady] = useState(false);
   const [bootError, setBootError] = useState('');
 
@@ -21,6 +40,18 @@ export default function App() {
 
   const base = path.split('?')[0] ?? '/';
   const query = new URLSearchParams(path.includes('?') ? path.slice(path.indexOf('?') + 1) : '');
+  const isHome = base === '/' || base === '';
+  const isOrder = base.startsWith('/orders/');
+  const isApplication = base === '/apply' || base.startsWith('/applications/');
+  const section = base === '/maintenance' ? '数据管理' : isApplication ? '老师报名' : '订单管理';
+  const title = isHome ? '订单工作台' : base === '/orders/new' ? '登记新的家教需求' : base.endsWith('/edit') ? '编辑资料' : base === '/apply' || base.endsWith('/apply') ? '录入老师报名' : base.startsWith('/applications/') ? '老师报名详情' : isOrder ? '家教订单详情' : '清理与备份';
+  const description = isHome ? '从家长需求到正式合作，在这里掌握每一单的进展。' : base === '/maintenance' ? '管理数据备份、恢复与到期清理，让日常记录安心留存。' : isApplication || base.endsWith('/apply') ? '围绕当前订单管理老师资料、试课安排与费用结算。' : '记录家长需求，跟进候选老师与合作进度。';
+  const navItems: { href: string; label: string; icon: IconName; active: boolean }[] = [
+    { href: '#/', label: '订单列表', icon: 'grid', active: isHome || base.startsWith('/applications/') || (isOrder && base !== '/orders/new' && !base.endsWith('/apply')) },
+    { href: '#/orders/new', label: '新建订单', icon: 'plus', active: base === '/orders/new' },
+    { href: '#/apply', label: '老师报名', icon: 'users', active: base === '/apply' || base.endsWith('/apply') },
+    { href: '#/maintenance', label: '清理与备份', icon: 'shield', active: base === '/maintenance' },
+  ];
 
   let page: React.ReactNode;
   if (!ready) {
@@ -28,19 +59,19 @@ export default function App() {
   } else if (base === '/' || base === '') {
     page = <Dashboard navigate={navigate} query={query} />;
   } else if (base === '/orders/new') {
-    page = <OrderForm navigate={navigate} />;
+    page = <OrderForm key={base} navigate={navigate} />;
   } else if (/^\/orders\/\d+\/edit$/.test(base)) {
-    page = <OrderForm navigate={navigate} orderId={Number(base.split('/')[2])} />;
+    page = <OrderForm key={base} navigate={navigate} orderId={Number(base.split('/')[2])} />;
   } else if (/^\/orders\/\d+$/.test(base)) {
-    page = <OrderDetail navigate={navigate} orderId={Number(base.split('/')[2])} />;
+    page = <OrderDetail key={base} navigate={navigate} orderId={Number(base.split('/')[2])} />;
   } else if (/^\/orders\/\d+\/apply$/.test(base)) {
-    page = <ApplicationForm navigate={navigate} orderId={Number(base.split('/')[2])} autoPaste={query.get('paste') === '1'} />;
+    page = <ApplicationForm key={base} navigate={navigate} orderId={Number(base.split('/')[2])} autoPaste={query.get('paste') === '1'} />;
   } else if (base === '/apply') {
-    page = <ApplicationForm navigate={navigate} autoPaste={query.get('paste') === '1'} />;
+    page = <ApplicationForm key={base} navigate={navigate} autoPaste={query.get('paste') === '1'} />;
   } else if (/^\/applications\/\d+\/edit$/.test(base)) {
     page = <ApplicationForm key={base} navigate={navigate} applicationId={Number(base.split('/')[2])} />;
   } else if (/^\/applications\/\d+$/.test(base)) {
-    page = <ApplicationDetail navigate={navigate} applicationId={Number(base.split('/')[2])} />;
+    page = <ApplicationDetail key={base} navigate={navigate} applicationId={Number(base.split('/')[2])} />;
   } else if (base === '/maintenance') {
     page = <Maintenance navigate={navigate} />;
   } else {
@@ -48,19 +79,32 @@ export default function App() {
   }
 
   return (
-    <>
-      <header className="topbar">
-        <span className="brand">家教中介管理系统</span>
-        <nav>
-          <a href="#/" className={base === '/' || base === '' ? 'active' : ''}>订单列表</a>
-          <a href="#/orders/new" className={base === '/orders/new' ? 'active' : ''}>新建订单</a>
-          <a href="#/apply" className={base === '/apply' ? 'active' : ''}>粘贴老师报名</a>
-          <a href="#/maintenance" className={base === '/maintenance' ? 'active' : ''}>清理与备份</a>
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content" onClick={(e) => { e.preventDefault(); document.getElementById('main-content')?.focus(); }}>跳到主要内容</a>
+      <aside className="sidebar">
+        <a className="brand" href="#/" aria-label="家教中介管理系统首页">
+          <span className="brand-mark"><Icon name="book" size={23} /></span>
+          <span>家教中介<span className="brand-subtitle">业务管理工作台</span></span>
+        </a>
+        <div className="nav-caption">工作空间</div>
+        <nav aria-label="主导航">
+          {navItems.map((item) => <a key={item.href} href={item.href} className={item.active ? 'active' : ''} aria-current={item.active ? 'page' : undefined}><Icon name={item.icon} /><span>{item.label}</span>{item.active && <span className="nav-dot" />}</a>)}
         </nav>
-        <span className="spacer" />
-        <span className="meta">本机服务 · 仅127.0.0.1</span>
+        <div className="sidebar-note"><Icon name="shield" size={22} /><strong>每一单，安心管理</strong><p>需求、报名与费用<br />清晰记录，有序跟进。</p></div>
+        <div className="workspace-profile"><span className="profile-avatar">中</span><div><strong>中介工作空间</strong><span><i className="online-dot" />本地运行</span></div></div>
+      </aside>
+      <div className="workspace">
+      <header className="topbar">
+        <div className="breadcrumb"><span>工作空间</span><span className="breadcrumb-separator">/</span><strong>{section}</strong></div>
+        <div className="topbar-meta"><span className="today">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(new Date())}</span><span className="local-tag"><i className="online-dot" />本机工作空间</span></div>
       </header>
-      <main className="container">{page}</main>
-    </>
+      <main className={`container ${isHome ? 'dashboard-page' : 'detail-page'} ${/^\/applications\/\d+$/.test(base) ? 'application-page' : /^\/orders\/\d+$/.test(base) ? 'order-detail-page' : ''}`} id="main-content" tabIndex={-1}>
+        <div className="page-heading"><div><button className="btn small back-button" onClick={goBack}>← 返回上一页</button><div className="eyebrow">{section}</div><h1>{title}</h1><p>{description}</p></div><div className="page-heading-mark"><Icon name={isHome ? 'grid' : base === '/maintenance' ? 'shield' : 'file'} size={26} /></div></div>
+        {toast && <div className="alert ok success-toast" role="status">{toast}<button className="btn small" onClick={() => setToast('')}>关闭提示</button></div>}
+        {page}
+        <footer className="page-footer"><span>家教中介管理系统</span><span>用清晰的记录，连接每一次教学合作</span></footer>
+      </main>
+      </div>
+    </div>
   );
 }

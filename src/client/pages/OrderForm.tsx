@@ -1,5 +1,5 @@
 // 订单录入/编辑：粘贴家长模板自动解析填写 + 普通表单。解析阶段不写库，保存走统一校验。
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import { CopyButton, ErrorAlert, Field } from '../components/ui';
 import { yuanStringToCents, MoneyFormatError } from '../../shared/money';
@@ -35,6 +35,7 @@ const EMPTY: FormState = {
 };
 
 export default function OrderForm({ navigate, orderId }: { navigate: (to: string) => void; orderId?: number }) {
+  const creationRequestId = useRef(crypto.randomUUID());
   const editing = Boolean(orderId);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [version, setVersion] = useState<number | null>(null);
@@ -83,7 +84,7 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
     }
   }, [editing, orderId]);
 
-  const set = (key: keyof FormState, value: string) => setForm((f) => ({ ...f, [key]: value }));
+  const set = (key: keyof FormState, value: string) => setForm((f) => key === 'teachingMode' && f.teachingMode === 'online' && value === 'offline' ? { ...f, teachingMode: value, locationDetail: '', publicArea: '' } : ({ ...f, [key]: value }));
 
   const applyDraft = (r: ParseResponse) => {
     const d = r.form;
@@ -102,6 +103,7 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
       teacherRequirements: str(d.teacherRequirements), publicRequirements: str(d.publicRequirements),
       notes: str(d.notes),
     });
+    requestAnimationFrame(() => { document.querySelector('form')?.setAttribute('data-dirty', 'true'); });
     setFieldErrors(r.fieldErrors);
   };
 
@@ -137,15 +139,15 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
         learningSituation: form.learningSituation,
         tutoringGoal: form.tutoringGoal,
         teachingMode: form.teachingMode,
-        locationDetail: form.locationDetail,
-        publicArea: form.publicArea,
+        locationDetail: form.teachingMode === 'online' ? '线上' : form.locationDetail,
+        publicArea: form.teachingMode === 'online' ? '线上' : form.publicArea,
         weeklySchedule: form.weeklySchedule,
         publicSchedule: form.publicSchedule,
         sessionsPerWeek: form.sessionsPerWeek === '' ? null : Number(form.sessionsPerWeek),
         sessionMinutes: form.sessionMinutes === '' ? null : Number(form.sessionMinutes),
         expectedStartDate: form.expectedStartDate || null,
         hourlyPayCents: payCents,
-        payNegotiable: form.payNegotiable === 'yes',
+        payNegotiable: form.payNegotiable === '' ? undefined : form.payNegotiable === 'yes',
         genderPreference: form.genderPreference,
         teacherRequirements: form.teacherRequirements || '无',
         publicRequirements: form.publicRequirements,
@@ -153,12 +155,13 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
       };
       if (editing) {
         await api.patch(`/api/orders/${orderId}?version=${version}`, payload);
+        window.dispatchEvent(new CustomEvent('tam:notice', { detail: '订单修改已保存' }));
         navigate(`/orders/${orderId}`);
       } else {
         if (payCents === null) {
           throw new MoneyFormatError('薪资为必填项，请填写金额（元/小时）');
         }
-        payload.creationRequestId = crypto.randomUUID();
+        payload.creationRequestId = creationRequestId.current;
         if (parseResult) payload.sourceTemplateText = parseResult.sourceText;
         const result = await api.post<{ order: { id: number }; duplicateWarning: string | null; duplicated: boolean }>(
           '/api/orders',
@@ -167,6 +170,7 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
         if (result.duplicateWarning) {
           alert(`${result.duplicateWarning}\n\n已进入订单详情，请确认。`);
         }
+        window.dispatchEvent(new CustomEvent('tam:notice', { detail: '订单已保存，开始招募' }));
         navigate(`/orders/${result.order.id}`);
       }
     } catch (err) {
@@ -232,7 +236,7 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
         <div className="alert warn">尚未解析。点击“解析并填入表单”，或点击“不用粘贴，直接填写”。</div>
       )}
 
-      <form className="card" onSubmit={submit}>
+      <form onChange={(e) => { e.currentTarget.dataset.dirty = 'true'; }} className="card" onSubmit={submit}>
         <h2>{editing ? `编辑订单 #${loadedId ?? ''}` : '新建订单（立即进入招募中）'}</h2>
         <ErrorAlert error={error} />
         <h3>【家长联系】微信、电话均必填</h3>
@@ -273,8 +277,9 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
               <option value="online">线上</option>
             </select>
           </Field>
-          <Field label="内部区域及地点（线下填小区/地标，线上填“线上”）" required error={fieldErrors.locationDetail}>
-            <input type="text" value={form.locationDetail} onChange={(e) => set('locationDetail', e.target.value)} />
+          {form.teachingMode !== 'online' && <>
+          <Field label="内部区域及地点（选填）" error={fieldErrors.locationDetail} hint="暂不想提供可先留空；未填写时显示“试课时问家长”。内部地点不会用于群内发布。">
+            <input type="text" placeholder="试课时问家长" value={form.locationDetail} onChange={(e) => set('locationDetail', e.target.value)} />
           </Field>
           <Field
             label="公开区域（仅用于群内发布，不填详细住址）"
@@ -285,6 +290,7 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
           >
             <input type="text" value={form.publicArea} onChange={(e) => set('publicArea', e.target.value)} />
           </Field>
+          </>}
           <Field label="内部时间（每周可上课日期和时间）" required error={fieldErrors.weeklySchedule} full>
             <textarea value={form.weeklySchedule} onChange={(e) => set('weeklySchedule', e.target.value)} />
           </Field>
