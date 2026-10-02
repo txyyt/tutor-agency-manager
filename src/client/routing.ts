@@ -2,6 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 const currentPath = () => window.location.hash.slice(1) || '/';
 const entryKey = (): string => crypto.randomUUID();
+const scrollRegion = () => document.documentElement.dataset.desktopScroll === 'true' ? document.querySelector<HTMLElement>('.workspace > main.container') : null;
+const scrollTop = () => scrollRegion()?.scrollTop ?? window.scrollY;
+const scrollTo = (top: number) => (scrollRegion() ?? window).scrollTo({ top, left: 0, behavior: 'instant' });
 
 /** 新页面置顶；返回恢复各历史条目的位置，等待异步内容撑开页面。 */
 export function useHashRoute() {
@@ -18,8 +21,8 @@ export function useHashRoute() {
     window.history.scrollRestoration = 'manual';
     window.history.replaceState({ ...window.history.state, tamScrollKey: active.current.key }, '');
     const save = () => {
-      positions.current.set(active.current.key, window.scrollY);
-      pagePositions.current.set(active.current.path, window.scrollY);
+      positions.current.set(active.current.key, scrollTop());
+      pagePositions.current.set(active.current.path, scrollTop());
     };
     const change = () => {
       save();
@@ -35,10 +38,10 @@ export function useHashRoute() {
       active.current = { path, top, key };
       setRoute(active.current);
     };
-    window.addEventListener('scroll', save, { passive: true });
+    window.addEventListener('scroll', save, { passive: true, capture: true });
     window.addEventListener('hashchange', change);
     return () => {
-      window.removeEventListener('scroll', save);
+      window.removeEventListener('scroll', save, true);
       window.removeEventListener('hashchange', change);
       window.history.scrollRestoration = previousRestoration;
     };
@@ -46,25 +49,33 @@ export function useHashRoute() {
 
   useLayoutEffect(() => {
     const top = route.top;
-    window.scrollTo({ top, left: 0, behavior: 'instant' });
+    scrollTo(top);
     if (!top) return;
     let frame = 0;
     let stopped = false;
     const stop = () => {
       stopped = true;
       observer.disconnect();
+      mutations.disconnect();
       cancelAnimationFrame(frame);
       clearTimeout(timeout);
       for (const event of ['wheel', 'touchstart', 'pointerdown', 'keydown']) window.removeEventListener(event, stop);
     };
     const restore = () => {
       if (stopped) return;
-      window.scrollTo({ top, left: 0, behavior: 'instant' });
-      if (document.documentElement.scrollHeight - window.innerHeight >= top) stop();
+      scrollTo(top);
+      const region = scrollRegion();
+      if ((region ? region.scrollHeight - region.clientHeight : document.documentElement.scrollHeight - window.innerHeight) >= top) stop();
     };
     const observer = new ResizeObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(restore); });
+    const mutations = new MutationObserver(() => {
+      if (stopped) return;
+      for (const child of scrollRegion()?.children ?? []) observer.observe(child);
+      cancelAnimationFrame(frame); frame = requestAnimationFrame(restore);
+    });
     const timeout = setTimeout(stop, 5000);
     observer.observe(document.body);
+    if (scrollRegion()) mutations.observe(scrollRegion()!, { childList: true, subtree: true });
     for (const event of ['wheel', 'touchstart', 'pointerdown', 'keydown']) window.addEventListener(event, stop, { passive: true });
     frame = requestAnimationFrame(restore);
     return stop;

@@ -54,6 +54,35 @@ async function makeRichData(prefix: string): Promise<{ orderId: number; appId: n
   return { orderId: order.id, appId: a.id };
 }
 
+it('统一备份根目录适用于全部类型，切换目录后旧备份仍能下载和校验恢复', async () => {
+  const isolated = await startTestServer({ allowTimeControl: false });
+  const customRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tam-backup-root-'));
+  try {
+    const old = (await isolated.client.post('/api/backups', { kind: 'manual' })).body.entry;
+    expect(old.dirPath).toBe(path.join(isolated.dataDir, 'backups', 'manual'));
+    expect((await isolated.client.patch('/api/backups/settings', { autoBackupDir: customRoot, confirmMigration: true })).status).toBe(200);
+    const paths = (await isolated.client.get('/api/backups')).body.paths;
+    expect(paths).toEqual({ rootDir: customRoot, dailyDir: path.join(customRoot, 'daily'), manualDir: path.join(customRoot, 'manual'), lifecycleDir: path.join(customRoot, 'lifecycle'), safetyDir: path.join(customRoot, 'safety') });
+    const kinds = ['daily', 'manual', 'startup', 'shutdown', 'pre-restore', 'pre-cleanup', 'pre-delete'] as const;
+    for (const kind of kinds) {
+      const entry = await isolated.app.backups.createBackup(kind);
+      const folder = kind === 'daily' || kind === 'manual' ? kind : kind === 'startup' || kind === 'shutdown' ? 'lifecycle' : 'safety';
+      expect(entry.dirPath).toBe(path.join(customRoot, folder));
+      expect(fs.existsSync(path.join(entry.dirPath, entry.fileName))).toBe(true);
+    }
+    expect(isolated.app.backups.getBackupFile(old.id).absolutePath).toBe(path.join(customRoot, 'manual', old.fileName));
+    expect(fs.existsSync(path.join(old.dirPath, old.fileName))).toBe(false);
+    expect((await isolated.client.post('/api/restores/validate-existing', { backupId: old.id })).status).toBe(200);
+    expect((await isolated.client.patch('/api/backups/settings', { autoBackupDir: null, confirmMigration: true })).status).toBe(200);
+    const reset = (await isolated.client.post('/api/backups', { kind: 'manual' })).body.entry;
+    expect(reset.dirPath).toBe(path.join(isolated.dataDir, 'backups', 'manual'));
+    expect((await isolated.client.get('/api/backups')).body.paths.rootDir).toBe(path.join(isolated.dataDir, 'backups'));
+  } finally {
+    isolated.close();
+    fs.rmSync(customRoot, { recursive: true, force: true });
+  }
+});
+
 async function createManualBackup(): Promise<any> {
   const res = await ts.client.post('/api/backups', { kind: 'manual' });
   expect(res.status).toBe(201);
@@ -270,15 +299,15 @@ describe('AC45/AC60：轮换规则与目录隔离', () => {
     expect((await ts.client.get(`/api/orders/${after.id}`)).status).toBe(404);
     expect((await ts.client.get('/api/backups')).body.entries.some((e: {kind: string}) => e.kind === 'pre-restore')).toBe(true);
   });
-  it('手动备份只保留最近10份，旧包删除，最新包仍可校验恢复', async () => {
+  it('手动备份只保留最近5份，旧包删除，最新包仍可校验恢复', async () => {
     const created: string[] = [];
     for (let i = 0; i < 12; i++) {
       const result = await ts.client.post('/api/backups', { kind: 'manual' });
       expect(result.status).toBe(201); created.push(result.body.entry.id);
     }
     const list = (await ts.client.get('/api/backups')).body.entries.filter((e: {kind: string}) => e.kind === 'manual');
-    expect(list).toHaveLength(10);
-    expect(list.map((e: {id: string}) => e.id)).toEqual(created.slice(2));
+    expect(list).toHaveLength(5);
+    expect(list.map((e: {id: string}) => e.id)).toEqual(created.slice(-5));
     expect((await ts.client.get(`/api/backups/${created[0]}/download`)).status).toBe(400);
     const latest = ts.app.backups.getBackupFile(created[11]!);
     expect((await ts.app.restores.validate(latest.absolutePath)).preview.counts.orders).toBeGreaterThanOrEqual(0);
@@ -293,7 +322,7 @@ describe('AC45/AC60：轮换规则与目录隔离', () => {
     expect((await ts.client.get('/api/backups')).body.settings.dailyBackupTime).toBe('21:30');
     await ts.client.patch('/api/backups/settings', { dailyBackupTime: '02:00' });
   });
-  it('定时备份固定保留5份；安全备份最多10份/30天；日轮换不影响手动备份', async () => {
+  it('定时备份固定保留5份；安全备份最多5份/30天；日轮换不影响手动备份', async () => {
     // 调低保留数验证轮换
     await ts.client.patch('/api/backups/settings', { dailyKeepCount: 5 });
     for (let i = 0; i < 7; i++) {
@@ -305,7 +334,7 @@ describe('AC45/AC60：轮换规则与目录隔离', () => {
     // 手动备份不受影响
     const manualCount = backups.entries.filter((e: any) => e.kind === 'manual').length;
     expect(manualCount).toBeGreaterThanOrEqual(2); // 上面创建的手动包未被轮换
-    // 安全备份10份上限
+    // 安全备份5份上限
     for (let i = 0; i < 12; i++) {
       await ts.client.post('/api/backups', { kind: 'daily' }); // daily轮换不影响
     }
@@ -315,7 +344,7 @@ describe('AC45/AC60：轮换规则与目录隔离', () => {
     }
     backups = (await ts.client.get('/api/backups')).body;
     const safes = backups.entries.filter((e: any) => e.kind === 'pre-cleanup');
-    expect(safes.length).toBeLessThanOrEqual(10);
+    expect(safes.length).toBe(5);
     // 目录隔离：自动备份目录与数据目录重叠被拒绝
     const bad = await ts.client.patch('/api/backups/settings', { autoBackupDir: ts.dataDir });
     expect(bad.status).toBe(400);

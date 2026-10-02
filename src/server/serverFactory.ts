@@ -16,6 +16,7 @@ import { ApplicationService } from './services/applicationService.js';
 import { AttachmentService } from './services/attachmentService.js';
 import { CleanupService } from './services/cleanupService.js';
 import { BackupService } from './services/backupService.js';
+import { BackupMigration } from './services/backupMigration.js';
 import { RestoreService } from './services/restoreService.js';
 import { Scheduler } from './services/schedulerService.js';
 import { createApp } from './http/app.js';
@@ -169,6 +170,7 @@ export function createServer(env: Env): AppServer {
       fs.mkdirSync(paths.dataDir, { recursive: true });
       instanceLock.acquire();
       ensureDirs(paths);
+      new BackupMigration(paths, runtime).reconcile();
       // 恢复操作对账（进程中断后保证完整新代或完整原代）
       const generationReconciliation = reconcileGenerations(paths, runtime);
       // 打开活动数据代并迁移
@@ -201,6 +203,7 @@ export function createServer(env: Env): AppServer {
         restores,
         scheduler,
       });
+      backups.enforceRetention();
       // 恢复操作对账（进程中断后保证“完整新代或完整原代”）
       const reconciliation = { ...generationReconciliation, ...restores.reconcileOnStartup() };
       server.app = createApp({

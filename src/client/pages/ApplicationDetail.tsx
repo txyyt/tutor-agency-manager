@@ -8,6 +8,7 @@ import { correctableFinanceFields, CORRECTION_FIELD_LABELS, type CorrectionField
 import WorkflowPanel from '../components/WorkflowPanel';
 import DeleteRecord from '../components/DeleteRecord';
 import AttachmentPreview from '../components/AttachmentPreview';
+import LoadingState from '../components/LoadingState';
 import type { ApplicationRecord, FinanceOperationRecord, FinanceState, OrderRecord } from '../../shared/types';
 
 interface DetailResponse {
@@ -47,7 +48,7 @@ export default function ApplicationDetail({ applicationId, navigate }: { navigat
   }, [load]);
 
   if (error && !data) return <ErrorAlert error={error} />;
-  if (!data) return <div className="empty">加载中…</div>;
+  if (!data) return <LoadingState label="正在加载老师资料" />;
   const { application: app, order } = data;
   const teacherSummary = buildCandidateSummary(order, app);
   const correctable = correctableFinanceFields(app);
@@ -270,7 +271,7 @@ export default function ApplicationDetail({ applicationId, navigate }: { navigat
               onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
             />
             <div className="btn-row">
-              <button type="button" className="btn primary" disabled={uploading || files.length === 0} onClick={doUpload}>
+              <button type="button" className="btn primary" aria-busy={uploading} disabled={uploading || files.length === 0} onClick={doUpload}>
                 {uploading ? '上传中…' : '上传所选文件'}
               </button>
               {files.length > 0 && <button type="button" className="btn" onClick={() => setFiles([])}>清除选择</button>}

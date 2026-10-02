@@ -8,10 +8,21 @@ import ApplicationForm from './pages/ApplicationForm';
 import ApplicationDetail from './pages/ApplicationDetail';
 import Maintenance from './pages/Maintenance';
 import Icon, { type IconName } from './components/Icon';
+import LoadingState from './components/LoadingState';
+import brandLogo from '../../desktop/brand.svg';
 
 export default function App() {
   const { path, navigate, back } = useHashRoute();
-  const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm?: () => void } | null>(null);
+  const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm?: () => void; onCancel?: () => void } | null>(null);
+  const cancelDialog = () => { dialog?.onCancel?.(); setDialog(null); };
+  useEffect(() => {
+    const close = (event: Event) => {
+      const { resolve } = (event as CustomEvent<{ resolve: (value: boolean) => void }>).detail;
+      setDialog({ title: '放弃未保存的修改并退出？', message: '有未保存的资料。确认后将放弃修改，保存关闭备份并退出软件。', onConfirm: () => resolve(true), onCancel: () => resolve(false) });
+    };
+    window.addEventListener('tam:desktop-close', close);
+    return () => window.removeEventListener('tam:desktop-close', close);
+  }, []);
   const executeBack = () => {
     const fallback = /^\/orders\/\d+\/(edit|apply)/.test(path) ? path.split('/').slice(0, 3).join('/') : /^\/applications\/\d+\/edit/.test(path) ? path.replace(/\/edit$/, '') : base.startsWith('/applications/') ? document.querySelector<HTMLAnchorElement>('a.btn[href^="#/orders/"]')?.getAttribute('href')?.slice(1) ?? '/' : '/';
     back(fallback);
@@ -28,7 +39,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!dialog) return;
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setDialog(null); };
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') { dialog.onCancel?.(); setDialog(null); } };
     window.addEventListener('keydown', close);
     return () => window.removeEventListener('keydown', close);
   }, [dialog]);
@@ -65,7 +76,7 @@ export default function App() {
 
   let page: React.ReactNode;
   if (!ready) {
-    page = <div className="empty">{bootError || '正在连接本机服务…'}</div>;
+    page = bootError ? <div className="alert error" role="alert">{bootError}</div> : <LoadingState label="正在连接本机服务" />;
   } else if (base === '/' || base === '') {
     page = <Dashboard navigate={navigate} query={query} />;
   } else if (base === '/orders/new') {
@@ -97,12 +108,12 @@ export default function App() {
       event.preventDefault(); event.stopPropagation();
       setDialog({ title: '放弃未保存的修改？', message: '有未保存的资料，确定离开并放弃修改？', onConfirm: () => navigate(destination) });
     }}>
-      {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setDialog(null); }}>
+      {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) cancelDialog(); }}>
         <div className="modal-panel" role="dialog" aria-modal="true" aria-label={dialog.title}>
           <h3 style={{ marginTop: 0 }}>{dialog.title}</h3>
           <p style={{ whiteSpace: 'pre-line' }}>{dialog.message}</p>
           <div className="btn-row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
-            {dialog.onConfirm && <button type="button" className="btn" autoFocus onClick={() => setDialog(null)}>取消</button>}
+            {dialog.onConfirm && <button type="button" className="btn" autoFocus onClick={cancelDialog}>取消</button>}
             <button type="button" className="btn primary" autoFocus={!dialog.onConfirm} onClick={() => { const action = dialog.onConfirm; setDialog(null); action?.(); }}>{dialog.onConfirm ? '确认放弃' : '知道了'}</button>
           </div>
         </div>
@@ -110,7 +121,7 @@ export default function App() {
       <a className="skip-link" href="#main-content" onClick={(e) => { e.preventDefault(); document.getElementById('main-content')?.focus(); }}>跳到主要内容</a>
       <aside className="sidebar">
         <a className="brand" href="#/" aria-label="家教中介管理系统首页">
-          <span className="brand-mark"><Icon name="book" size={23} /></span>
+          <span className="brand-mark"><img src={brandLogo} alt="" width="42" height="42" /></span>
           <span>家教中介<span className="brand-subtitle">业务管理工作台</span></span>
         </a>
         <div className="nav-caption">工作空间</div>

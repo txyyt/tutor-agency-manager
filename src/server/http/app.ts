@@ -737,12 +737,14 @@ export function createApp(svc: Services): Express {
     res.json({ ok: true });
   });
 
-  app.patch('/api/backups/settings', (req, res) => {
+  app.patch('/api/backups/settings', async (req, res) => {
     const body = validate(backupSettingsSchema, req.body);
-    const { importMaxUploadBytes, importMaxTotalBytes, importMaxEntries, ...rest } = body;
-    svc.backups.updateSettings(rest);
-    svc.backups.updateImportLimits({ importMaxUploadBytes, importMaxTotalBytes, importMaxEntries });
-    res.json(svc.backups.listBackups());
+    const migrationResult = await svc.backups.updateSettings(body);
+    res.json({ ...svc.backups.listBackups(), migrationResult });
+  });
+
+  app.post('/api/backups/migration/retry-cleanup', async (_req, res) => {
+    res.json(await svc.backups.retryMigrationCleanup());
   });
 
   // ---- 恢复 ----

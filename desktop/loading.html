@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self'">
+  <title>家教中介管理系统</title>
+  <style>
+    :root { color-scheme: light; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; color: #234539; background: #f7faf8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; overflow: hidden; background: radial-gradient(ellipse at 50% 42%, #fff 0%, #f7faf8 65%); }
+    .ambient { position: fixed; width: 550px; height: 550px; border-radius: 50%; pointer-events: none; filter: blur(70px); opacity: .45; }
+    .ambient-one { top: -290px; right: -140px; background: #daeee5; }.ambient-two { bottom: -350px; left: -180px; background: #e8eee0; }
+    main { position: relative; text-align: center; padding: 50px 24px; animation: arrive .7s cubic-bezier(.2,.7,.2,1) both; }
+    .logo-scene { position: relative; width: 132px; height: 132px; margin: 0 auto 35px; display: grid; place-items: center; }
+    .logo-halo { position: absolute; inset: -24px; border-radius: 50%; background: radial-gradient(circle, #d9eee4 0%, #e8f3ec80 50%, transparent 72%); animation: breathe 3.6s ease-in-out infinite; }
+    .logo-tile { position: relative; width: 104px; height: 104px; border-radius: 30px; background: linear-gradient(145deg,#37ac89,#168568 58%,#0d6456); box-shadow: 0 18px 40px #166e5524, inset 0 1px 1px #ffffff70; transform: rotate(-4deg); animation: settle .9s cubic-bezier(.2,.7,.2,1) both; }
+    .logo-tile::after { content: ''; position: absolute; inset: 1px; border: 1px solid #ffffff24; border-radius: 29px; pointer-events: none; }
+    .logo-tile svg { width: 100%; height: 100%; transform: rotate(4deg); }
+    .page { stroke: #fff; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 220; stroke-dashoffset: 220; animation: draw 1s .15s ease forwards; }
+    .page-right { animation-delay: .3s; }.page-detail { stroke-width: 3.5; opacity: .7; animation-delay: .55s; }
+    .connection { fill: #c9edb6; transform-origin: 86px 57px; animation: connect .65s .65s both; }
+    .intro { animation: arrive .7s .1s both; }.overline { color: #82968a; font-size: 11px; letter-spacing: 4px; margin-bottom: 13px; }
+    h1 { font-size: 33px; font-weight: 600; letter-spacing: 5px; margin: 0; padding-left: 5px; }
+    .subtitle { color: #7f9388; font-size: 13px; margin: 16px 0 0; letter-spacing: 1px; }
+    .loading-status { margin: 47px auto 0; width: 240px; animation: arrive .7s .25s both; }.loading-track { height: 3px; border-radius: 9px; background: #e4ece7; overflow: hidden; }
+    .loading-track span { display: block; height: 100%; width: 38%; border-radius: inherit; background: linear-gradient(90deg,transparent,#249773,#70b998); animation: travel 1.8s cubic-bezier(.45,0,.3,1) infinite; }
+    .loading-status p { color: #617f6f; font-size: 12px; margin: 19px 0 8px; }.loading-status small { color: #a1aea7; font-size: 10px; }
+    .loading-dots { display: inline-flex; gap: 3px; margin-left: 5px; }.loading-dots i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: dot 1.5s infinite; }.loading-dots i:nth-child(2) { animation-delay: .18s; }.loading-dots i:nth-child(3) { animation-delay: .36s; }
+    footer { position: fixed; bottom: 27px; font-size: 10px; letter-spacing: 2px; color: #a7b4ad; }
+    @keyframes arrive { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes settle { from { opacity: 0; transform: translateY(12px) rotate(-12deg) scale(.92); } to { opacity: 1; transform: rotate(-4deg); } }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    @keyframes connect { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: scale(1); } }
+    @keyframes breathe { 50% { transform: scale(1.14); opacity: .6; } }
+    @keyframes travel { from { transform: translateX(-110%); } to { transform: translateX(370%); } }
+    @keyframes dot { 0%,80%,100% { opacity: .3; } 40% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; }.page { stroke-dashoffset: 0; }.loading-track span { width: 100%; background: #8fbda8; } }
+  </style>
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div><div class="ambient ambient-two" aria-hidden="true"></div>
+  <main aria-labelledby="splash-title">
+    <div class="logo-scene" aria-hidden="true"><div class="logo-halo"></div><div class="logo-tile"><svg viewBox="0 0 128 128" fill="none"><path class="page page-left" d="M64 91C51 81 38 77 23 78V35C39 34 53 39 64 50"/><path class="page page-right" d="M64 91C77 81 90 77 105 78V35C89 34 75 39 64 50V91"/><path class="page page-detail" d="M34 49C42 49 49 52 54 56M34 61C42 61 49 64 54 68"/><circle class="connection" cx="86" cy="57" r="7"/></svg></div></div>
+    <div class="intro"><div class="overline">连接需求 · 成就教学</div><h1 id="splash-title">家教中介管理系统</h1><p class="subtitle">让每一次匹配，都井然有序。</p></div>
+    <div class="loading-status" role="status" aria-live="polite"><div class="loading-track" aria-hidden="true"><span></span></div><p>正在准备你的工作台<span class="loading-dots" aria-hidden="true"><i></i><i></i><i></i></span></p><small>首次启动或资料较多时，请稍候</small></div>
+  </main><footer>家教中介管理系统</footer>
+</body>
+</html>

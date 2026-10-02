@@ -7,6 +7,7 @@ import { centsToYuanString } from '../../shared/money';
 import type { OrderTask } from '../../shared/orderTasks';
 import type { OrderRecord } from '../../shared/types';
 import Icon from '../components/Icon';
+import LoadingState from '../components/LoadingState';
 
 interface ListResponse {
   items: Array<OrderRecord & { tasks: OrderTask[]; lastActivityAt: string }>;
@@ -119,6 +120,7 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
         </div>
 
         <ErrorAlert error={error} />
+        {!data && !error && <LoadingState label="正在加载订单列表" />}
 
         {data && data.items.length === 0 && <div className="empty">暂无符合条件的订单，可调整筛选条件或点击“新建订单”。</div>}
 

@@ -33,6 +33,8 @@ coverage/
 # 依赖与构建
 node_modules/
 dist/
+release/
+.desktop-dev/
 *.tsbuildinfo
 
 # 日志与环境

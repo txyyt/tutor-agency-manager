@@ -80,8 +80,8 @@ export const LIMITS = {
   defaultImportMaxEntries: 100_000,
   defaultDailyBackupsToKeep: 5,
   maxLifecycleBackups: 5,
-  maxManualBackups: 10,
-  maxSafetyBackups: 10,
+  maxManualBackups: 5,
+  maxSafetyBackups: 5,
   safetyBackupMaxAgeDays: 30,
   backupFormatVersion: 1,
   dbSchemaVersion: 2,
@@ -254,7 +254,7 @@ export interface BackupIndexEntry {
 }
 
 export interface BackupSettings {
-  autoBackupDir: string | null; // null = 默认 data/backups/daily
+  autoBackupDir: string | null; // 兼容已有字段名；所有类型备份的根目录，null = data/backups
   dailyKeepCount: number;
   dailyBackupTime: string; // HH:mm，Asia/Hong_Kong（北京时间）
   importMaxUploadBytes: number;

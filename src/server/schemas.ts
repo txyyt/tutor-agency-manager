@@ -186,6 +186,7 @@ export const backupSettingsSchema = z.object({
   dailyBackupTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, '每日备份时间须为HH:mm（00:00—23:59）').optional(),
   dailyKeepCount: z.literal(5).optional(),
   autoBackupDir: z.string().min(1).nullable().optional(),
+  confirmMigration: z.boolean().optional(),
   importMaxUploadBytes: z.number().int().min(1024 * 1024).optional(),
   importMaxTotalBytes: z.number().int().min(1024 * 1024).optional(),
   importMaxEntries: z.number().int().min(100).optional(),

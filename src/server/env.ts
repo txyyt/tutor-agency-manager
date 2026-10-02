@@ -21,7 +21,7 @@ export function loadEnv(overrides?: Partial<Pick<Env, 'dataDir' | 'port' | 'appR
   const distClientDir = path.join(appRoot, 'dist', 'client');
   const migrationDir = path.join(appRoot, 'migrations');
   const appVersion = '1.0.0';
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!Number.isInteger(port) || port < (process.env.APP_DESKTOP === '1' ? 0 : 1) || port > 65535) {
     throw new Error(`APP_PORT无效：${process.env.APP_PORT}`);
   }
   return { appRoot, dataDir, port, host, appVersion, allowTimeControl, distClientDir, migrationDir };

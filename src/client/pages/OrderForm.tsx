@@ -340,7 +340,7 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
         </div>
 
         <div className="btn-row">
-          <button type="submit" className="btn primary" disabled={saving}>
+          <button type="submit" className="btn primary" aria-busy={saving} disabled={saving}>
             {saving ? '保存中…' : editing ? '保存修改' : '保存并开始招募'}
           </button>
           <button type="button" className="btn" onClick={() => navigate(editing ? `/orders/${orderId}` : '/')}>取消</button>

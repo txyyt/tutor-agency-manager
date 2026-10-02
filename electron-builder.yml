@@ -1,0 +1,24 @@
+appId: cn.tutoragency.manager
+productName: 家教中介管理系统
+directories:
+  output: release
+files:
+  - desktop/**
+  - dist/**
+  - migrations/**
+  - package.json
+asar: true
+win:
+  icon: desktop/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: TutorAgencyManager-Setup-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+publish: null

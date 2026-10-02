@@ -110,6 +110,7 @@ export function ConfirmButton(props: {
               <button
                 type="button"
                 className="btn primary"
+                aria-busy={busy}
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true);
@@ -186,20 +187,22 @@ export function Pagination(props: { page: number; pageSize: number; total: numbe
 }
 
 export function ErrorAlert({ error }: { error: unknown }) {
+  const [dismissedError, setDismissedError] = useState<unknown>(null);
   useEffect(() => {
-    if (!error) return;
+    if (!error) { setDismissedError(null); return; }
+    if (error === dismissedError) return;
     const timer = setTimeout(() => {
       const field = document.querySelector<HTMLElement>('.has-error');
       field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       field?.querySelector<HTMLElement>('input,select,textarea')?.focus({ preventScroll: true });
     }, 100);
     return () => clearTimeout(timer);
-  }, [error]);
-  if (!error) return null;
+  }, [error, dismissedError]);
+  if (!error || error === dismissedError) return null;
   const e = error as { message?: string; fieldErrors?: Record<string, string> };
   return (
     <div className="alert error error-toast" role="alert">
-      {e.message ?? String(error)}
+      <div className="error-toast-content">{e.message ?? String(error)}
       {e.fieldErrors && (
         <pre>
           {Object.entries(e.fieldErrors)
@@ -207,6 +210,10 @@ export function ErrorAlert({ error }: { error: unknown }) {
             .join('\n')}
         </pre>
       )}
+      </div>
+      <button type="button" className="toast-close" aria-label="关闭错误提示" title="关闭错误提示" onClick={() => setDismissedError(error)}>
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
     </div>
   );
 }

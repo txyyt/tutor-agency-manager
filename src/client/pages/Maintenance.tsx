@@ -4,6 +4,7 @@ import { api, downloadFile, refreshSession } from '../api';
 import { ConfirmButton, ErrorAlert, Field, TextBlock, TimeText } from '../components/ui';
 import { formatHkDateTimeCn } from '../../shared/datetime';
 import type { BackupIndexEntry } from '../../shared/types';
+import LoadingState from '../components/LoadingState';
 
 interface CleanupPreviewData {
   cutoffIso: string;
@@ -23,7 +24,8 @@ interface BackupsResponse {
     importMaxEntries: number;
   };
   daily: { lastSuccessDateHk: string | null; lastSuccessAtUtc: string | null; lastError: string | null };
-  paths: { lifecycleDir: string; dailyDir: string; safetyDir: string; manualDir: string };
+  paths: { rootDir: string; lifecycleDir: string; dailyDir: string; safetyDir: string; manualDir: string };
+  migration: { pendingCleanupCount: number };
   scheduler: {
     dailyBackup: { lastSuccessDateHk: string | null; lastSuccessAtUtc: string | null; lastError: string | null; lastAttemptAtUtc: string | null; dueNow: boolean };
     cleanup: { lastRunAtUtc: string | null; lastResult: string | null; intervalMs: number };
@@ -52,7 +54,10 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
   const [preview, setPreview] = useState<CleanupPreviewData | null>(null);
   const [backups, setBackups] = useState<BackupsResponse | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [notice, setNotice] = useState('');
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
+  const [openingFolder, setOpeningFolder] = useState(false);
+  const [choosingFolder, setChoosingFolder] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const [settings, setSettings] = useState({ autoBackupDir: '', dailyKeepCount: '5', dailyBackupTime: '20:00', importMaxUploadMB: '1024', importMaxTotalMB: '2048' });
   const [restoreToken, setRestoreToken] = useState<string | null>(null);
@@ -67,6 +72,8 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
     try {
       setPreview(await api.get<CleanupPreviewData>('/api/cleanup/preview'));
       const b = await api.get<BackupsResponse>('/api/backups');
+      // 按时间倒序；同一毫秒生成时，后登记的备份排在前面。
+      b.entries = [...b.entries].reverse().sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc));
       setBackups(b);
       setSettings({
         autoBackupDir: b.settings.autoBackupDir ?? '',
@@ -101,28 +108,73 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
   };
 
   const createBackup = async () => {
+    if (backingUp || savingSettings) return;
+    setBackingUp(true);
+    setError(null);
+    window.dispatchEvent(new CustomEvent('tam:notice', { detail: '' }));
     try {
       await api.post('/api/backups', { kind: 'manual' });
-      setNotice('手动备份完成');
+      window.dispatchEvent(new CustomEvent('tam:notice', { detail: '手动备份完成' }));
       await load();
     } catch (e) {
       setError(e);
+    } finally {
+      setBackingUp(false);
     }
   };
 
-  const saveSettings = async () => {
+  const saveSettings = async (confirmMigration = false) => {
+    if (savingSettings || backingUp) return;
+    setSavingSettings(true);
+    setError(null);
+    window.dispatchEvent(new CustomEvent('tam:notice', { detail: '' }));
     try {
-      await api.patch('/api/backups/settings', {
+      const result = await api.patch<BackupsResponse & { migrationResult: { migratedCount: number; skippedMissingCount: number; warnings: string[] } }>('/api/backups/settings', {
         autoBackupDir: settings.autoBackupDir.trim() === '' ? null : settings.autoBackupDir.trim(),
+        confirmMigration,
         dailyKeepCount: Number(settings.dailyKeepCount),
         dailyBackupTime: settings.dailyBackupTime,
         importMaxUploadBytes: Number(settings.importMaxUploadMB) * 1024 * 1024,
         importMaxTotalBytes: Number(settings.importMaxTotalMB) * 1024 * 1024,
       });
-      setNotice('设置已保存');
+      const skipped = result.migrationResult.skippedMissingCount;
+      window.dispatchEvent(new CustomEvent('tam:notice', { detail: (result.migrationResult.migratedCount ? `设置已保存，已迁移${result.migrationResult.migratedCount}份备份` : '设置已保存') + (skipped ? `，跳过${skipped}条文件已不存在的备份记录` : '') }));
       await load();
+      if (result.migrationResult.warnings.length) window.dispatchEvent(new CustomEvent('tam:dialog', { detail: {
+        title: result.migration.pendingCleanupCount ? '目录已切换，部分旧文件或空目录未清理' : '设置已保存，部分清理未完成',
+        message: result.migrationResult.warnings.join('\n') + (result.migration.pendingCleanupCount ? '\n请点击“重试清理旧目录”。' : '\n请检查文件权限，后续备份会继续执行轮换。'),
+      } }));
     } catch (e) {
       setError(e);
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const chooseBackupFolder = async () => {
+    if (!window.tutorDesktop || choosingFolder) return;
+    setChoosingFolder(true);
+    setError(null);
+    try {
+      const directory = await window.tutorDesktop.chooseBackupFolder();
+      if (directory !== null) setSettings(s => ({ ...s, autoBackupDir: directory }));
+    } catch (e) {
+      setError(e);
+    } finally {
+      setChoosingFolder(false);
+    }
+  };
+
+  const openBackupFolder = async () => {
+    if (!window.tutorDesktop || openingFolder) return;
+    setOpeningFolder(true);
+    setError(null);
+    try {
+      await window.tutorDesktop.openBackupFolder();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOpeningFolder(false);
     }
   };
 
@@ -166,6 +218,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
 
   return (
     <>
+      {!backups && !error && <LoadingState label="正在加载备份与设置" compact />}
       <div className="card">
         <h2>90天自动清理</h2>
         <div className="alert info">
@@ -175,7 +228,6 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
           服务停止期间不执行定时备份；重新启动会生成启动备份并评估到期清理。
         </div>
         <ErrorAlert error={error} />
-        {notice && <div className="alert ok">{notice}</div>}
         {cleanupResult && <div className="alert ok">{cleanupResult}</div>}
         {preview && (
           <>
@@ -228,7 +280,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
                 confirmBody={
                   <div>
                     <p>将删除预览列出的 {preview.candidates.length} 项（执行时会重新核验，预览后有变化的数据不会被删）。</p>
-                    <p>删除前自动生成清理前安全备份（保留最多10份/30天）；删除不可恢复（备份是唯一恢复点）。</p>
+                    <p>删除前自动生成清理前安全备份（保留最多5份/30天）；删除不可恢复（备份是唯一恢复点）。</p>
                   </div>
                 }
                 onConfirm={runCleanup}
@@ -242,8 +294,8 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
       <div className="card">
         <h2>备份与恢复</h2>
         <div className="alert info">
-          定时备份：每天{backups?.settings.dailyBackupTime ?? '20:00'}（北京时间）运行到设置时间时生成，错过不补做，保留最近5份。启动和正常关闭各备份一次，两者合计保留最近5份。手动备份保留最近10份，新备份成功后清理超出的旧包。
-          恢复前/清理前安全备份单独保留最多10份且不超过30天。
+          定时备份：每天{backups?.settings.dailyBackupTime ?? '20:00'}（北京时间）运行到设置时间时生成，错过不补做，保留最近5份。启动和正常关闭各备份一次，两者合计保留最近5份。手动备份保留最近5份，新备份成功后清理超出的旧包。
+          恢复前/清理前/删除前安全备份合计保留最多5份且不超过30天。
           已下载到其他位置的副本不受保留规则影响。本地备份防误操作和文件损坏；建议定期把导出包另存到其他磁盘/U盘防电脑故障。
           本系统不自动上传云端。
         </div>
@@ -251,23 +303,40 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
           <>
             <h3>调度状态</h3>
             <dl className="kv" style={{ marginBottom: 12 }}>
-              <dt>定时备份目录</dt><dd style={{ wordBreak: 'break-all' }}>{backups.paths.dailyDir}</dd>
-              <dt>启动/关闭备份目录</dt><dd style={{ wordBreak: 'break-all' }}>{backups.paths.lifecycleDir}</dd>
               <dt>定时备份最近成功</dt><dd>{backups.scheduler.dailyBackup.lastSuccessAtUtc ? formatHkDateTimeCn(backups.scheduler.dailyBackup.lastSuccessAtUtc) : '尚无'}（{backups.scheduler.dailyBackup.lastSuccessDateHk ?? '—'}）</dd>
               <dt>最近错误</dt><dd style={{ color: backups.daily.lastError ? 'var(--danger)' : undefined }}>{backups.daily.lastError ?? '无'}</dd>
               <dt>上次清理</dt><dd>{backups.scheduler.cleanup.lastRunAtUtc ? formatHkDateTimeCn(backups.scheduler.cleanup.lastRunAtUtc) : '尚未运行'}：{backups.scheduler.cleanup.lastResult ?? '—'}</dd>
             </dl>
             <div className="btn-row" style={{ marginBottom: 12 }}>
-              <button type="button" className="btn primary" onClick={createBackup}>立即备份</button>
+              <button type="button" className="btn primary" onClick={createBackup} disabled={backingUp || savingSettings} aria-busy={backingUp}>{backingUp ? '备份中…' : '立即备份'}</button>
               <button type="button" className="btn" onClick={() => void downloadFile('/api/exports/recruiting', 'recruiting.txt')}>导出招募TXT（非备份）</button>
             </div>
             <h3>设置</h3>
+            {backups.migration.pendingCleanupCount > 0 && <div className="alert warn">
+              目录已切换，仍有{backups.migration.pendingCleanupCount}个旧文件或空目录待清理。
+              <button type="button" className="btn small" onClick={async () => {
+                try {
+                  const result = await api.post<{ warnings: string[] }>('/api/backups/migration/retry-cleanup');
+                  await load();
+                  if (result.warnings.length) setError(new Error(result.warnings.join('\n')));
+                  else window.dispatchEvent(new CustomEvent('tam:notice', { detail: '旧文件和空备份目录已清理' }));
+                } catch (e) { setError(e); }
+              }}>重试清理旧目录</button>
+            </div>}
             <div className="form-grid">
-              <Field label="自动备份目录（留空=默认数据目录内backups/daily；不能与数据目录重合）" full>
-                <input type="text" value={settings.autoBackupDir} onChange={(e) => setSettings((s) => ({ ...s, autoBackupDir: e.target.value }))} placeholder="如 D:\tutor-backups" />
-              </Field>
-              <Field label="定时备份保留份数">
-                <input type="number" value={5} readOnly />
+              <Field label="备份目录（留空=默认数据目录内backups；各类备份按子目录保存）" full>
+                <div className="backup-directory-field">
+                  <input type="text" disabled={savingSettings || backingUp} value={settings.autoBackupDir} onChange={(e) => setSettings((s) => ({ ...s, autoBackupDir: e.target.value }))} placeholder="如 D:\tutor-backups" />
+                  <button type="button" className="btn" onClick={chooseBackupFolder} disabled={!window.tutorDesktop || choosingFolder || savingSettings || backingUp}
+                    title={!window.tutorDesktop ? '桌面版可直接选择文件夹' : '选择后点击保存设置生效'}>
+                    {choosingFolder ? '正在选择…' : '选择文件夹'}
+                  </button>
+                  <button type="button" className="btn" onClick={openBackupFolder}
+                    disabled={!window.tutorDesktop || openingFolder || settings.autoBackupDir.trim() !== (backups.settings.autoBackupDir ?? '')}
+                    title={!window.tutorDesktop ? '桌面版可直接打开文件夹' : settings.autoBackupDir.trim() !== (backups.settings.autoBackupDir ?? '') ? '请先保存目录设置' : backups.paths.rootDir}>
+                    {openingFolder ? '正在打开…' : '打开备份文件夹'}
+                  </button>
+                </div>
               </Field>
               <Field label="每日备份时间（北京时间）" hint="默认20:00，可修改；仅在软件运行到设置时间时备份，错过不补做。">
                 <input aria-label="每日备份时间（北京时间）" type="time" value={settings.dailyBackupTime} onChange={e => setSettings(s => ({ ...s, dailyBackupTime: e.target.value }))} />
@@ -280,7 +349,12 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
               </Field>
             </div>
             <div className="btn-row">
-              <button type="button" className="btn" onClick={saveSettings}>保存设置</button>
+              {settings.autoBackupDir.trim() !== (backups.settings.autoBackupDir ?? '') ? <ConfirmButton
+                label={savingSettings ? '迁移并保存中…' : '保存设置'} disabled={savingSettings || backingUp || choosingFolder}
+                confirmTitle="迁移已有备份并切换目录？" confirmLabel="确认迁移并保存"
+                confirmBody={`将系统管理的已有备份迁移到新目录，后续备份也保存到这里。复制并校验成功后才删除旧文件。自行下载的副本及其他文件不会移动。`}
+                onConfirm={() => saveSettings(true)}
+              /> : <button type="button" className="btn" onClick={() => void saveSettings()} disabled={savingSettings || backingUp || choosingFolder} aria-busy={savingSettings}>{savingSettings ? '保存中…' : '保存设置'}</button>}
             </div>
             <h3 style={{ marginTop: 16 }}>备份列表（{backups.entries.length}）</h3>
             {backups.entries.length === 0 && <div className="empty">还没有备份</div>}
@@ -328,7 +402,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
         <Field label="从已有备份中选择" full>
           <select aria-label="从已有备份中选择" value={selectedBackupId} disabled={restoreBusy} onChange={e => { setSelectedBackupId(e.target.value); setRestoreToken(null); setRestorePreview(null); setRestoreFileName(''); }}>
             <option value="">请选择备份</option>
-            {[...(backups?.entries ?? [])].sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc)).map(e => <option key={e.id} value={e.id}>{KIND_LABELS[e.kind]} · {formatHkDateTimeCn(e.createdAtUtc)} · {e.fileName}</option>)}
+            {(backups?.entries ?? []).map(e => <option key={e.id} value={e.id}>{KIND_LABELS[e.kind]} · {formatHkDateTimeCn(e.createdAtUtc)} · {e.fileName}</option>)}
           </select>
         </Field>
         <div className="btn-row" style={{ marginBottom: 18 }}><button type="button" className="btn" disabled={restoreBusy || !selectedBackupId} onClick={() => { const entry = backups?.entries.find(e => e.id === selectedBackupId); if (entry) void validateRestore(entry); }}>校验所选备份</button></div>
@@ -352,7 +426,6 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
           <button type="button" className="btn" disabled={restoreBusy} onClick={() => restoreFileRef.current?.click()}>选择备份包（ZIP）</button>
           {restoreFileName && <span>已选择：{restoreFileName}</span>}
         </div>
-        <ErrorAlert error={error} />
         {restorePreview && restoreToken && (
           <div className="paste-result">
             <h3>校验通过，恢复预览</h3>

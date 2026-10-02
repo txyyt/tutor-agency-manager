@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import JSZip from 'jszip';
 import { LIMITS, type BackupIndexEntry, type BackupKind, type BackupManifest } from '../../shared/types.js';
 import { hkCompactDateString } from '../../shared/datetime.js';
-import { badRequest, conflict } from '../errors.js';
+import { AppError, badRequest, conflict } from '../errors.js';
 import { mergeDailyHighWater, orderDailyHighWater } from '../orderNumbers.js';
 import type { Clock } from '../clock.js';
 import type { RuntimeConfigStore } from '../runtimeConfig.js';
@@ -15,6 +15,7 @@ import type { DataPaths } from '../paths.js';
 import type { ActiveData } from '../activeData.js';
 import type { Repository } from '../repository.js';
 import type { MaintenanceMutex } from '../locks.js';
+import { BackupMigration } from './backupMigration.js';
 
 const KIND_TAGS: Record<BackupKind, string> = {
   daily: 'daily',
@@ -27,11 +28,11 @@ const KIND_TAGS: Record<BackupKind, string> = {
 };
 
 function kindDir(paths: DataPaths, settingsAutoDir: string | null, kind: BackupKind): string {
-  if (kind === 'daily' && settingsAutoDir) return settingsAutoDir;
-  if (kind === 'daily') return paths.dailyBackupsDir;
-  if (kind === 'manual') return paths.manualBackupsDir;
-  if (kind === 'startup' || kind === 'shutdown') return paths.lifecycleBackupsDir;
-  return paths.safetyBackupsDir;
+  const root = settingsAutoDir ?? paths.backupsRoot;
+  if (kind === 'daily') return path.join(root, 'daily');
+  if (kind === 'manual') return path.join(root, 'manual');
+  if (kind === 'startup' || kind === 'shutdown') return path.join(root, 'lifecycle');
+  return path.join(root, 'safety');
 }
 
 function sha256File(file: string): { hash: string; size: number } {
@@ -59,7 +60,8 @@ export class BackupService {
     entries: BackupIndexEntry[];
     settings: ReturnType<RuntimeConfigStore['load']>['backupSettings'];
     daily: { lastSuccessDateHk: string | null; lastSuccessAtUtc: string | null; lastError: string | null };
-    paths: { dailyDir: string; lifecycleDir: string; safetyDir: string; manualDir: string };
+    paths: { rootDir: string; dailyDir: string; lifecycleDir: string; safetyDir: string; manualDir: string };
+    migration: { pendingCleanupCount: number };
   } {
     const cfg = this.deps.runtime.load();
     const index = this.readIndex();
@@ -67,16 +69,18 @@ export class BackupService {
     return {
       entries,
       settings: cfg.backupSettings,
+      migration: { pendingCleanupCount: new BackupMigration(this.deps.paths, this.deps.runtime).pendingCount() },
       daily: {
         lastSuccessDateHk: cfg.dailyBackup.lastSuccessDateHk,
         lastSuccessAtUtc: cfg.dailyBackup.lastSuccessAtUtc,
         lastError: cfg.dailyBackup.lastError,
       },
       paths: {
-        dailyDir: cfg.backupSettings.autoBackupDir ?? this.deps.paths.dailyBackupsDir,
-        lifecycleDir: this.deps.paths.lifecycleBackupsDir,
-        safetyDir: this.deps.paths.safetyBackupsDir,
-        manualDir: this.deps.paths.manualBackupsDir,
+        rootDir: cfg.backupSettings.autoBackupDir ?? this.deps.paths.backupsRoot,
+        dailyDir: kindDir(this.deps.paths, cfg.backupSettings.autoBackupDir, 'daily'),
+        lifecycleDir: kindDir(this.deps.paths, cfg.backupSettings.autoBackupDir, 'startup'),
+        safetyDir: kindDir(this.deps.paths, cfg.backupSettings.autoBackupDir, 'pre-restore'),
+        manualDir: kindDir(this.deps.paths, cfg.backupSettings.autoBackupDir, 'manual'),
       },
     };
   }
@@ -221,7 +225,7 @@ export class BackupService {
     }
   }
 
-  /** 定时备份5份，启动与关闭合计5份；安全备份10份/30天；手动10份。失败保留索引。 */
+  /** 定时备份5份，启动与关闭合计5份；安全备份5份/30天；手动5份。失败保留索引。 */
   rotate(kind: BackupKind, _dailyKeepCount: number): void {
     const index = this.readIndex();
     const now = this.deps.clock.iso();
@@ -277,11 +281,11 @@ export class BackupService {
   validateAutoBackupDir(dir: string): void {
     const resolved = path.resolve(dir);
     const root = path.parse(resolved).root;
-    if (resolved === root) throw badRequest('INVALID_BACKUP_DIR', '自动备份目录不能是根目录');
+    if (resolved === root) throw badRequest('INVALID_BACKUP_DIR', '备份目录不能是磁盘根目录');
     if (fs.existsSync(resolved)) {
       const st = fs.lstatSync(resolved);
-      if (st.isSymbolicLink()) throw badRequest('INVALID_BACKUP_DIR', '自动备份目录不能是目录链接');
-      if (!st.isDirectory()) throw badRequest('INVALID_BACKUP_DIR', '自动备份目录必须是文件夹');
+      if (st.isSymbolicLink()) throw badRequest('INVALID_BACKUP_DIR', '备份目录不能是目录链接');
+      if (!st.isDirectory()) throw badRequest('INVALID_BACKUP_DIR', '备份目录必须是文件夹');
     }
     const protectedPaths = [
       this.deps.paths.dataDir,
@@ -294,17 +298,27 @@ export class BackupService {
       if (resolved === rp || resolved.startsWith(rp + path.sep) || rp.startsWith(resolved + path.sep)) {
         throw badRequest(
           'INVALID_BACKUP_DIR',
-          `自动备份目录不能与数据目录、活动数据代、附件或导入暂存目录重合或互为父子：${rp}`,
+          `备份目录不能与数据目录、活动数据代、附件或导入暂存目录重合或互为父子：${rp}`,
         );
       }
     }
   }
 
-  updateSettings(patch: { dailyKeepCount?: number; dailyBackupTime?: string; autoBackupDir?: string | null }): { ok: true } {
+  async updateSettings(patch: { dailyKeepCount?: number; dailyBackupTime?: string; autoBackupDir?: string | null; confirmMigration?: boolean; importMaxUploadBytes?: number; importMaxTotalBytes?: number; importMaxEntries?: number }): Promise<{ migratedCount: number; skippedMissingCount: number; warnings: string[] }> {
+    return this.deps.maintenance.runExclusive(() => {
+      try { return this.updateSettingsLocked(patch); }
+      catch (error) {
+        if (error instanceof AppError) throw error;
+        throw conflict('BACKUP_SETTINGS_FAILED', `保存备份设置未完成：${(error as Error).message}`);
+      }
+    });
+  }
+
+  private updateSettingsLocked(patch: { dailyKeepCount?: number; dailyBackupTime?: string; autoBackupDir?: string | null; confirmMigration?: boolean; importMaxUploadBytes?: number; importMaxTotalBytes?: number; importMaxEntries?: number }): { migratedCount: number; skippedMissingCount: number; warnings: string[] } {
     if (patch.dailyBackupTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.dailyBackupTime)) {
       throw badRequest('INVALID_SETTING', '每日备份时间须为HH:mm（00:00—23:59）');
     }
-    const cfg = this.deps.runtime.load();
+    const cfg = structuredClone(this.deps.runtime.load());
     if (patch.dailyBackupTime !== undefined) cfg.backupSettings.dailyBackupTime = patch.dailyBackupTime;
     if (patch.dailyKeepCount !== undefined) {
       if (patch.dailyKeepCount !== LIMITS.defaultDailyBackupsToKeep) {
@@ -317,12 +331,35 @@ export class BackupService {
         cfg.backupSettings.autoBackupDir = null;
       } else {
         this.validateAutoBackupDir(patch.autoBackupDir);
-        fs.mkdirSync(patch.autoBackupDir, { recursive: true });
         cfg.backupSettings.autoBackupDir = path.resolve(patch.autoBackupDir);
       }
     }
-    this.deps.runtime.save();
-    return { ok: true };
+    for (const [key, minimum] of [['importMaxUploadBytes', 1024 * 1024], ['importMaxTotalBytes', 1024 * 1024], ['importMaxEntries', 100]] as const) {
+      const value = patch[key];
+      if (value !== undefined) {
+        if (!Number.isInteger(value) || value < minimum) throw badRequest('INVALID_SETTING', '导入限制无效');
+        cfg.backupSettings[key] = value;
+      }
+    }
+    const oldRoot = this.deps.runtime.load().backupSettings.autoBackupDir ?? this.deps.paths.backupsRoot;
+    const root = cfg.backupSettings.autoBackupDir ?? this.deps.paths.backupsRoot;
+    let result = { migratedCount: 0, skippedMissingCount: 0, warnings: [] as string[] };
+    if (path.resolve(oldRoot).toLowerCase() !== path.resolve(root).toLowerCase()) {
+      if (this.readIndex().length && !patch.confirmMigration) throw conflict('BACKUP_MIGRATION_CONFIRM_REQUIRED', '切换备份目录会迁移已有备份，请先确认');
+      fs.mkdirSync(root, { recursive: true });
+      result = new BackupMigration(this.deps.paths, this.deps.runtime).migrate(cfg.backupSettings, entry => kindDir(this.deps.paths, cfg.backupSettings.autoBackupDir, entry.kind));
+    } else this.deps.runtime.replace(cfg);
+    try { this.enforceRetention(); }
+    catch (error) { result.warnings.push(`设置已保存，但备份轮换未完成：${(error as Error).message}`); }
+    return result;
+  }
+
+  enforceRetention(): void {
+    for (const kind of ['daily', 'startup', 'manual', 'pre-cleanup'] as const) this.rotate(kind, LIMITS.defaultDailyBackupsToKeep);
+  }
+
+  async retryMigrationCleanup(): Promise<{ warnings: string[] }> {
+    return this.deps.maintenance.runExclusive(() => ({ warnings: new BackupMigration(this.deps.paths, this.deps.runtime).reconcile() }));
   }
 
   /** 上传大小限制（导入用）更新 */

@@ -6,6 +6,7 @@ import { centsToYuanString } from '../../shared/money';
 import type { ApplicationRecord, FinanceState, OrderRecord } from '../../shared/types';
 import WorkflowPanel from '../components/WorkflowPanel';
 import DeleteRecord from '../components/DeleteRecord';
+import LoadingState from '../components/LoadingState';
 
 interface Candidate extends ApplicationRecord {
   finance: FinanceState;
@@ -50,7 +51,7 @@ export default function OrderDetail({ navigate, orderId }: { navigate: (to: stri
   if (error && !data) {
     return <ErrorAlert error={error} />;
   }
-  if (!data) return <div className="empty">加载中…</div>;
+  if (!data) return <LoadingState label="正在加载订单" />;
   const { order, applications } = data;
   const visible = applications.filter(a => feeFilter === 'pending-refund' ? a.finance.pendingRefundCents > 0 : feeFilter === 'active' ? ['submitted','recommended','awaiting_trial','trial_passed','direct_cooperation'].includes(a.status) : true);
   const eligible = visible.filter(a => ['submitted','recommended'].includes(a.status)).map(a => a.id);

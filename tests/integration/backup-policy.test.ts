@@ -8,7 +8,7 @@ let ts: TestServer;
 beforeEach(async () => { ts = await startTestServer(); });
 afterEach(() => { vi.restoreAllMocks(); ts.close(); });
 
-it('启动和关闭合计5份、定时独立5份、手动10份，正常包仍可恢复', async () => {
+it('启动和关闭合计5份、定时独立5份、手动5份，正常包仍可恢复', async () => {
   await createOrder(ts.client);
   const newest: string[] = [];
   for (let i = 0; i < 8; i++) {

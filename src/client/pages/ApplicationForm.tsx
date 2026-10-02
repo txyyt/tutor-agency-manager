@@ -351,7 +351,7 @@ export default function ApplicationForm({ navigate, orderId, applicationId, auto
         <input aria-label="报名简历附件" type="file" multiple accept=".pdf,.jpg,.jpeg,.png" onChange={e => setFiles(Array.from(e.target.files ?? []))} />
         {files.length > 0 && <ul>{files.map((f, i) => <li key={i}>{f.name} <button type="button" className="btn small" onClick={() => setFiles(old => old.filter((_, index) => i !== index))}>移除</button></li>)}</ul>}
         <div className="btn-row">
-          <button type="submit" className="btn primary" disabled={saving || !targetOrder || Boolean(orderStatusBad) || Boolean(orderMismatched)}>
+          <button type="submit" className="btn primary" aria-busy={saving} disabled={saving || !targetOrder || Boolean(orderStatusBad) || Boolean(orderMismatched)}>
             {saving ? '保存中…' : editing ? '保存修改' : '保存报名（状态：已报名）'}
           </button>
           <button type="button" className="btn" onClick={() => navigate(editing ? `/applications/${applicationId}` : fixedOrder ? `/orders/${orderId}` : '/')}>取消</button>

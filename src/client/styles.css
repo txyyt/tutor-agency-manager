@@ -7,6 +7,15 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+/* 轻量滚动条：保留拖动能力，去掉箭头和明显轨道。 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd8d1; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #94b2a3; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: #cbd8d1 transparent; }
+}
 body { font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; }
 button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
@@ -23,6 +32,7 @@ button, a { touch-action: manipulation; }
 .brand { display: flex; align-items: center; gap: 12px; color: var(--text); font-weight: 700; font-size: 19px; letter-spacing: .5px; padding: 0 6px; }
 .brand:hover { text-decoration: none; }
 .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; background: var(--primary); border-radius: 12px; color: white; box-shadow: 0 4px 8px #1685681c; }
+.brand-mark img { display: block; width: 42px; height: 42px; }
 .brand-subtitle { display: block; font-size: 10px; font-weight: 400; color: var(--muted); letter-spacing: 1.4px; margin-top: 1px; }
 .nav-caption { color: #9ba5a1; font-size: 11px; letter-spacing: 1.2px; padding: 0 16px; margin: 44px 0 12px; }
 .sidebar nav { display: grid; gap: 8px; }
@@ -37,6 +47,17 @@ button, a { touch-action: manipulation; }
 .breadcrumb-separator { color: #d2d9d5; }
 .topbar-meta { display: flex; gap: 23px; align-items: center; font-size: 11px; color: var(--muted); }
 .container { max-width: 1600px; width: 100%; margin: 0 auto; padding: 32px 38px 24px; outline: none; }
+.container { animation: workspace-enter .32s ease-out both; }
+.loading-state { opacity: 0; min-height: 190px; padding: 32px; border: 1px solid var(--line); border-radius: 14px; background: #fff; transition: opacity .2s ease; }
+.loading-state.visible { opacity: 1; }.loading-state.compact { min-height: 0; padding: 20px 24px; margin-bottom: 20px; }
+.loading-caption { display: flex; align-items: center; gap: 11px; color: #7b9085; font-size: 12px; }
+.loading-spinner, .btn[aria-busy="true"]::before { display: inline-block; width: 16px; height: 16px; flex-shrink: 0; border: 2px solid #a0c9b750; border-top-color: #168568; border-radius: 50%; animation: loading-spin .8s linear infinite; }
+.btn[aria-busy="true"]::before { content: ''; border-color: currentColor; border-right-color: transparent; width: 14px; height: 14px; }
+.loading-skeleton { display: grid; gap: 16px; margin-top: 28px; }.loading-skeleton span { height: 12px; border-radius: 6px; background: linear-gradient(90deg,#edf3ef 20%,#f8faf9 50%,#edf3ef 80%); background-size: 220% 100%; animation: loading-shimmer 1.8s linear infinite; }.loading-skeleton span:nth-child(2) { width: 84%; }.loading-skeleton span:nth-child(3) { width: 61%; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
+@keyframes loading-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@keyframes workspace-enter { from { opacity: .4; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .container, .loading-spinner, .loading-skeleton span, .btn[aria-busy="true"]::before { animation: none; }.loading-state { transition: none; } }
 .page-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 26px; gap: 20px; }
 .eyebrow { font-size: 11px; color: #8c9992; margin-bottom: 5px; letter-spacing: 1px; }
 h1 { margin: 0; font-size: 27px; font-weight: 650; letter-spacing: -.7px; line-height: 1.4; color: #23382e; }
@@ -225,7 +246,9 @@ pre.plain.editable { user-select: all; }
 }
 
 /* 验收反馈：固定提示、待办、集中流程和附件预览。 */
-.error-toast { position: fixed; top: 22px; right: 24px; z-index: 250; max-width: min(460px, calc(100vw - 40px)); max-height: 35vh; overflow: auto; box-shadow: 0 8px 30px #0002; }
+.error-toast { position: fixed; top: 88px; right: 24px; z-index: 250; max-width: min(460px, calc(100vw - 40px)); max-height: 35vh; overflow: auto; box-shadow: 0 8px 30px #0002; display: flex; align-items: flex-start; gap: 18px; }
+.error-toast-content { min-width: 0; overflow-wrap: anywhere; }
+.error-toast .toast-close { color: var(--danger); }
 .has-error input,.has-error select,.has-error textarea { border-color: var(--danger); box-shadow: 0 0 0 2px #ef444416; }
 .back-button { margin-bottom: 12px; }
 .needs-action td { background: #fffaf0; }
@@ -259,8 +282,11 @@ pre.plain.editable { user-select: all; }
 .attachment-preview iframe { width: 100%; height: 60vh; border: 1px solid var(--line); }
 .attachment-preview img { display: block; max-width: 100%; max-height: 60vh; margin: auto; }
 
-.success-toast { position: fixed; top: 20px; right: 24px; z-index: 240; max-width: min(460px, calc(100vw - 40px)); box-shadow: 0 8px 30px #0002; display: flex; flex-wrap: nowrap; align-items: center; gap: 18px; padding: 12px 14px 12px 18px; }
+.success-toast { position: fixed; top: 88px; right: 24px; z-index: 240; max-width: min(460px, calc(100vw - 40px)); box-shadow: 0 8px 30px #0002; display: flex; flex-wrap: nowrap; align-items: center; gap: 18px; padding: 12px 14px 12px 18px; }
 .success-toast > span { min-width: 0; overflow-wrap: anywhere; }
+.error-toast, .success-toast { animation: toast-enter .26s cubic-bezier(.2,.7,.2,1) both; }
+@keyframes toast-enter { from { opacity: 0; transform: translate(10px, 8px); } to { opacity: 1; transform: translate(0, 0); } }
+@media (prefers-reduced-motion: reduce) { .error-toast, .success-toast { animation: none; } }
 .toast-close { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #639380; line-height: 1; cursor: pointer; }
 .toast-close svg { display: block; flex-shrink: 0; }
 .toast-close:hover { background: #16856812; color: var(--primary); }
@@ -283,6 +309,9 @@ pre.plain.editable { user-select: all; }
 .pagination .btn { height: 32px; }
 .pagination .page-number { min-width: 32px; padding: 4px 8px; }
 .pagination .page-number.selected { color: var(--primary); background: var(--primary-weak); border-color: #b8d8c9; font-weight: 600; }
+.backup-directory-field { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.backup-directory-field input { flex: 1 1 260px; min-width: 0; }
+.backup-directory-field .btn { flex: 0 0 auto; white-space: nowrap; }
 .pagination-ellipsis { padding: 0 3px; }
 .pagination-jump { margin: 0; gap: 7px; }
 .pagination-jump input { width: 58px; height: 32px; padding: 4px 7px; text-align: center; font-size: 12px; }
