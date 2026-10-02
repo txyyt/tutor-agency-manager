@@ -7,12 +7,14 @@ import { badRequest, conflict, notFound } from '../errors.js';
 import { computeFinanceState, financeContextFor } from '../../shared/finance.js';
 import { orderTasks, type OrderTask } from '../../shared/orderTasks.js';
 import { tx } from '../transaction.js';
+import { compareOrderNumbers } from '../orderNumbers.js';
 
 export interface ServiceDeps {
   db: DatabaseSync;
   repo: Repository;
   clock: Clock;
   bumpHighWater: (table: 'orders' | 'applications', id: number) => void;
+  reserveOrderSequence: (day: string) => number;
   onOrdersChanged?: () => void;
 }
 
@@ -65,7 +67,9 @@ export class OrderService {
         )
         .run(this.bindOrder(input, now, opts));
       const id = Number(info.lastInsertRowid);
-      const orderNo = `JJ-${hkCompactDateString(now)}-${String(id).padStart(4, '0')}`;
+      const day = hkCompactDateString(now);
+      const sequence = this.deps.reserveOrderSequence(day);
+      const orderNo = `JJ-${day}-${String(sequence).padStart(4, '0')}`;
       this.deps.db.prepare('UPDATE orders SET order_no = ? WHERE id = ?').run(orderNo, id);
       this.deps.bumpHighWater('orders', id);
       let duplicateWarning: string | null = null;
@@ -139,7 +143,9 @@ export class OrderService {
     tasksFirst?: boolean;
     page: number;
     pageSize: number;
-  }): { items: Array<OrderRecord & { tasks: OrderTask[] }>; total: number; page: number; pageSize: number } {
+  }): { items: Array<OrderRecord & { tasks: OrderTask[]; lastActivityAt: string }>; total: number; page: number; pageSize: number } {
+    // 列表显示、筛选与排序使用整单最新变动，不改写记录本身的更新时间。
+    const activitySql = 'MAX(orders.updated_at, COALESCE((SELECT MAX(applications.updated_at) FROM applications WHERE applications.order_id = orders.id), orders.updated_at))';
     const where: string[] = [];
      
     const params: any[] = [];
@@ -161,11 +167,11 @@ export class OrderService {
       params.push(`%${query.grade}%`);
     }
     if (query.dateFrom) {
-      where.push("date(updated_at, '+8 hours') >= date(?)");
+      where.push(`date(${activitySql}, '+8 hours') >= date(?)`);
       params.push(query.dateFrom);
     }
     if (query.dateTo) {
-      where.push("date(updated_at, '+8 hours') <= date(?)");
+      where.push(`date(${activitySql}, '+8 hours') <= date(?)`);
       params.push(query.dateTo);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -177,20 +183,23 @@ export class OrderService {
     const page = Math.max(query.page, 1);
     const rows = this.deps.db
       .prepare(
-        `SELECT * FROM orders ${whereSql} ORDER BY updated_at DESC, id DESC`,
+        `SELECT orders.*, ${activitySql} AS last_activity_at FROM orders ${whereSql} ORDER BY updated_at DESC, id DESC`,
       )
       .all(...params) as Row[];
-    const items = rows.map(rowToOrder).map(order => ({ ...order, tasks: orderTasks(order, this.deps.repo.listApplicationsOfOrder(order.id)) })).filter(order => !query.needsAction || order.tasks.length > 0);
+    const items = rows.map(row => {
+      const order = rowToOrder(row);
+      return { ...order, lastActivityAt: String(row.last_activity_at), tasks: orderTasks(order, this.deps.repo.listApplicationsOfOrder(order.id)) };
+    }).filter(order => !query.needsAction || order.tasks.length > 0);
     items.sort((a, b) => {
       if (query.tasksFirst !== false) {
         const priority = Number(b.tasks.length > 0) - Number(a.tasks.length > 0);
         if (priority) return priority;
       }
       switch (query.sort) {
-        case 'updated-asc': return a.updatedAt.localeCompare(b.updatedAt) || a.id - b.id;
-        case 'number-asc': return a.orderNo.localeCompare(b.orderNo) || a.id - b.id;
-        case 'number-desc': return b.orderNo.localeCompare(a.orderNo) || b.id - a.id;
-        default: return b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id;
+        case 'updated-asc': return a.lastActivityAt.localeCompare(b.lastActivityAt) || a.id - b.id;
+        case 'number-asc': return compareOrderNumbers(a.orderNo, b.orderNo) || a.id - b.id;
+        case 'number-desc': return compareOrderNumbers(b.orderNo, a.orderNo) || b.id - a.id;
+        default: return b.lastActivityAt.localeCompare(a.lastActivityAt) || b.id - a.id;
       }
     });
     return {

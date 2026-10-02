@@ -9,6 +9,7 @@ import {
 import type { Repository } from '../repository.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import { tx } from '../transaction.js';
+import { correctableFinanceFields, CORRECTION_FIELD_LABELS, type CorrectionField } from '../../shared/financeCorrection.js';
 import type { Clock } from '../clock.js';
 
  
@@ -492,6 +493,11 @@ export class ApplicationService {
       }
       if (app.version !== version) throw conflict('VERSION_CONFLICT', '报名已被他人修改，请刷新后重试');
       const corrected = body.corrected ?? {};
+      const allowed = correctableFinanceFields(app);
+      if (!Object.values(allowed).some(Boolean)) throw conflict('FINANCE_NOT_REGISTERED', '尚未设置费用或登记收退款，不能更正；请先通过正常业务流程登记');
+      for (const field of Object.keys(corrected) as CorrectionField[]) {
+        if (!allowed[field]) throw conflict('FINANCE_NOT_REGISTERED', `${CORRECTION_FIELD_LABELS[field]}尚未设置或登记，不能通过更正首次填写`);
+      }
       const next = {
         agencyFeeCents: corrected.agencyFeeCents ?? app.agencyFeeCents,
         depositDueCents: corrected.depositDueCents ?? app.depositDueCents,

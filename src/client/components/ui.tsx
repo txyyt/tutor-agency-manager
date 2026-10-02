@@ -141,18 +141,47 @@ export function TimeText({ iso }: { iso: string | null | undefined }) {
 
 export function Pagination(props: { page: number; pageSize: number; total: number; onPage: (p: number) => void }) {
   const pages = Math.max(1, Math.ceil(props.total / props.pageSize));
+  const [target, setTarget] = useState(String(props.page));
+  const [error, setError] = useState('');
+  useEffect(() => { setTarget(String(props.page)); setError(''); }, [props.page]);
+  useEffect(() => {
+    if (props.page > pages) props.onPage(pages);
+  }, [props.page, pages, props.onPage]);
+  // 保留首尾页和当前页附近的页码，大量订单时也不会撑开页面。
+  const visiblePages = Array.from({ length: pages <= 7 ? pages : 0 }, (_, i) => i + 1);
+  if (pages > 7) {
+    visiblePages.push(...new Set([1, ...Array.from({ length: 5 }, (_, i) => Math.min(Math.max(props.page - 2, 2), pages - 5) + i), pages]));
+  }
   return (
-    <div className="pagination">
-      <button type="button" className="btn small" disabled={props.page <= 1} onClick={() => props.onPage(props.page - 1)}>
-        上一页
-      </button>
-      <span>
-        第 {props.page} / {pages} 页，共 {props.total} 条
-      </span>
-      <button type="button" className="btn small" disabled={props.page >= pages} onClick={() => props.onPage(props.page + 1)}>
-        下一页
-      </button>
-    </div>
+    <nav className="pagination" aria-label="订单分页">
+      <span className="pagination-summary">第 {props.page} / {pages} 页，共 {props.total} 条</span>
+      <div className="pagination-controls">
+        <button type="button" className="btn small" disabled={props.page <= 1} onClick={() => props.onPage(props.page - 1)}>上一页</button>
+        {visiblePages.map((n, i) => (
+          <span className="pagination-page" key={n}>
+            {i > 0 && n - (visiblePages[i - 1] ?? n) > 1 && <span className="pagination-ellipsis" aria-hidden="true">…</span>}
+            <button type="button" className={`btn small page-number${n === props.page ? ' selected' : ''}`} aria-label={`第 ${n} 页`} aria-current={n === props.page ? 'page' : undefined} onClick={() => props.onPage(n)}>{n}</button>
+          </span>
+        ))}
+        <button type="button" className="btn small" disabled={props.page >= pages} onClick={() => props.onPage(props.page + 1)}>下一页</button>
+      </div>
+      <form className="pagination-jump" aria-label="页码跳转" noValidate onSubmit={e => {
+        e.preventDefault();
+        const n = Number(target);
+        if (!target.trim() || !Number.isInteger(n) || n < 1 || n > pages) {
+          setError(`请输入 1—${pages} 之间的整数页码`);
+          return;
+        }
+        setError('');
+        props.onPage(n);
+      }}>
+        <label htmlFor="order-page-jump">跳至</label>
+        <input id="order-page-jump" aria-label="跳转页码" type="number" min={1} max={pages} step={1} value={target} aria-invalid={!!error} aria-describedby={error ? 'order-page-error' : undefined} onChange={e => { setTarget(e.target.value); setError(''); }} />
+        <span>页</span>
+        <button type="submit" className="btn small">跳转</button>
+      </form>
+      {error && <span id="order-page-error" className="pagination-error" role="alert">{error}</span>}
+    </nav>
   );
 }
 
@@ -192,21 +221,7 @@ export function TextBlock({ text, maxHeight }: { text: string; maxHeight?: numbe
   );
 }
 
-export function useHashRoute(): { path: string; navigate: (to: string) => void } {
-  const [hash, setHash] = useState(() => window.location.hash.slice(1) || '/');
-  useEffect(() => {
-    const onChange = () => setHash(window.location.hash.slice(1) || '/');
-    window.addEventListener('hashchange', onChange);
-    return () => window.removeEventListener('hashchange', onChange);
-  }, []);
-  return {
-    path: hash,
-    navigate: (to: string) => {
-      window.location.hash = to;
-      window.scrollTo(0, 0);
-    },
-  };
-}
+export { useHashRoute } from '../routing';
 
 export function parseQuery(path: string): URLSearchParams {
   const idx = path.indexOf('?');

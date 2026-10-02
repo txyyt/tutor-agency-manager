@@ -488,10 +488,22 @@ export function createApp(svc: Services): Express {
         }
         case 'start': order = svc.orders.orderAction(order.id, 'start-trial', {}, order.version).order; break;
         case 'pass': action('pass'); if ((body.amountCents ?? 0) > 0) finance('receive-supplement', body.amountCents); tryComplete(); break;
-        case 'direct': action('direct-cooperation'); finance('set-fees'); if ((body.amountCents ?? 0) > 0) finance('receive-supplement', body.amountCents); tryComplete(); break;
+        case 'direct':
+          action('direct-cooperation');
+          if (body.agencyFeeCents !== undefined) finance('set-fees');
+          if ((body.amountCents ?? 0) > 0) finance('receive-supplement', body.amountCents);
+          tryComplete(); break;
         case 'fail': action('fail'); break;
         case 'withdraw': action('withdraw'); break;
-        case 'settle': finance('receive-supplement', body.amountCents); tryComplete(); break;
+        case 'settle':
+          if (order.status !== 'reviewing') throw conflict('STATE_CONFLICT', '只能在待结算阶段收取中介费');
+          if (body.agencyFeeCents !== undefined) {
+            if (application.agencyFeeCents !== null) throw conflict('STATE_CONFLICT', '中介费已约定，调整金额请使用更正登记');
+            finance('set-fees');
+          }
+          if ((body.amountCents ?? 0) > 0) finance('receive-supplement', body.amountCents);
+          else if (application.agencyFeeCents !== 0) throw conflict('INVALID_AMOUNT', '请填写实际收到的中介费金额');
+          tryComplete(); break;
         case 'refund': {
           const pending = financeOf(application, order).pendingRefundCents;
           const amount = body.amountCents ?? 0;

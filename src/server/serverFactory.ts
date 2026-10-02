@@ -20,6 +20,7 @@ import { RestoreService } from './services/restoreService.js';
 import { Scheduler } from './services/schedulerService.js';
 import { createApp } from './http/app.js';
 import { conflict } from './errors.js';
+import { mergeDailyHighWater, orderDailyHighWater } from './orderNumbers.js';
 
 export interface AppServer {
   env: Env;
@@ -77,6 +78,14 @@ export function createServer(env: Env): AppServer {
       db: active.proxy,
       repo,
       clock,
+      reserveOrderSequence: (day) => {
+        const high = mergeDailyHighWater(runtime.load().orderDailyHighWater, orderDailyHighWater(active.proxy));
+        const next = (high[day] ?? 0) + 1;
+        if (!Number.isSafeInteger(next)) throw conflict('NUMBER_LIMIT', '当日订单序号已超过系统整数范围');
+        // 先持久化编号预留；事务失败可留空号，但不重复使用已发出的编号。
+        runtime.mutate(cfg => { cfg.orderDailyHighWater = { ...high, [day]: next }; });
+        return next;
+      },
       bumpHighWater: (table, id) => {
         const cfg = runtime.load();
         if (table === 'orders') cfg.numberHighWater.orders = Math.max(cfg.numberHighWater.orders, id);
@@ -178,6 +187,7 @@ export function createServer(env: Env): AppServer {
       openGeneration(cfg.activeGenerationId);
       const openedDb = active.current();
       migrate(openedDb, migrationDir);
+      runtime.mutate(cfg => { cfg.orderDailyHighWater = mergeDailyHighWater(cfg.orderDailyHighWater, orderDailyHighWater(openedDb)); });
       // 启动清理未引用附件
       attachments.sweepUnreferenced();
       // 完成对象注入

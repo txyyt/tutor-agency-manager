@@ -8,6 +8,7 @@ export interface RuntimeConfig {
   activeGenerationId: string;
   dataEpoch: number;
   numberHighWater: { orders: number; applications: number };
+  orderDailyHighWater: Record<string, number>;
   backupSettings: BackupSettings;
   dailyBackup: {
     lastSuccessDateHk: string | null;
@@ -37,6 +38,7 @@ export class RuntimeConfigStore {
         activeGenerationId: raw.activeGenerationId ?? '',
         dataEpoch: raw.dataEpoch ?? 1,
         numberHighWater: raw.numberHighWater ?? { orders: 0, applications: 0 },
+        orderDailyHighWater: raw.orderDailyHighWater ?? {},
         backupSettings: {
           autoBackupDir: raw.backupSettings?.autoBackupDir ?? null,
           dailyKeepCount: raw.backupSettings?.dailyKeepCount ?? LIMITS.defaultDailyBackupsToKeep,
@@ -60,6 +62,7 @@ export class RuntimeConfigStore {
         activeGenerationId: '',
         dataEpoch: 1,
         numberHighWater: { orders: 0, applications: 0 },
+        orderDailyHighWater: {},
         backupSettings: {
           autoBackupDir: null,
           dailyKeepCount: LIMITS.defaultDailyBackupsToKeep,

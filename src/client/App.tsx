@@ -16,12 +16,28 @@ export default function App() {
   useEffect(() => {
     if (previousPath.current !== path) { history.current.push(previousPath.current); previousPath.current = path; }
   }, [path]);
-  const goBack = () => {
-    if (document.querySelector('form[data-dirty="true"]') && !window.confirm('有未保存的资料，确定返回并放弃修改？')) return;
+  const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm?: () => void } | null>(null);
+  const executeBack = () => {
     const prior = history.current.pop();
     const fallback = /^\/orders\/\d+\/(edit|apply)/.test(path) ? path.split('/').slice(0, 3).join('/') : /^\/applications\/\d+\/edit/.test(path) ? path.replace(/\/edit$/, '') : base.startsWith('/applications/') ? document.querySelector<HTMLAnchorElement>('a.btn[href^="#/orders/"]')?.getAttribute('href')?.slice(1) ?? '/' : '/';
-    previousPath.current = prior ?? fallback; navigate(prior ?? fallback);
+    previousPath.current = prior ?? fallback; navigate(prior ?? fallback, { restoreScroll: true });
   };
+  const goBack = () => {
+    if (document.querySelector('form[data-dirty="true"]')) {
+      setDialog({ title: '放弃未保存的修改？', message: '有未保存的资料，确定返回并放弃修改？', onConfirm: executeBack });
+    } else executeBack();
+  };
+  useEffect(() => {
+    const show = (event: Event) => setDialog((event as CustomEvent<{ title: string; message: string }>).detail);
+    window.addEventListener('tam:dialog', show);
+    return () => window.removeEventListener('tam:dialog', show);
+  }, []);
+  useEffect(() => {
+    if (!dialog) return;
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setDialog(null); };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [dialog]);
   const [toast, setToast] = useState('');
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -80,6 +96,16 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setDialog(null); }}>
+        <div className="modal-panel" role="dialog" aria-modal="true" aria-label={dialog.title}>
+          <h3 style={{ marginTop: 0 }}>{dialog.title}</h3>
+          <p style={{ whiteSpace: 'pre-line' }}>{dialog.message}</p>
+          <div className="btn-row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+            {dialog.onConfirm && <button type="button" className="btn" autoFocus onClick={() => setDialog(null)}>取消</button>}
+            <button type="button" className="btn primary" autoFocus={!dialog.onConfirm} onClick={() => { const action = dialog.onConfirm; setDialog(null); action?.(); }}>{dialog.onConfirm ? '确认放弃' : '知道了'}</button>
+          </div>
+        </div>
+      </div>}
       <a className="skip-link" href="#main-content" onClick={(e) => { e.preventDefault(); document.getElementById('main-content')?.focus(); }}>跳到主要内容</a>
       <aside className="sidebar">
         <a className="brand" href="#/" aria-label="家教中介管理系统首页">
@@ -90,17 +116,15 @@ export default function App() {
         <nav aria-label="主导航">
           {navItems.map((item) => <a key={item.href} href={item.href} className={item.active ? 'active' : ''} aria-current={item.active ? 'page' : undefined}><Icon name={item.icon} /><span>{item.label}</span>{item.active && <span className="nav-dot" />}</a>)}
         </nav>
-        <div className="sidebar-note"><Icon name="shield" size={22} /><strong>每一单，安心管理</strong><p>需求、报名与费用<br />清晰记录，有序跟进。</p></div>
-        <div className="workspace-profile"><span className="profile-avatar">中</span><div><strong>中介工作空间</strong><span><i className="online-dot" />本地运行</span></div></div>
       </aside>
       <div className="workspace">
       <header className="topbar">
         <div className="breadcrumb"><span>工作空间</span><span className="breadcrumb-separator">/</span><strong>{section}</strong></div>
-        <div className="topbar-meta"><span className="today">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(new Date())}</span><span className="local-tag"><i className="online-dot" />本机工作空间</span></div>
+        <div className="topbar-meta"><span className="today">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(new Date())}</span></div>
       </header>
       <main className={`container ${isHome ? 'dashboard-page' : 'detail-page'} ${/^\/applications\/\d+$/.test(base) ? 'application-page' : /^\/orders\/\d+$/.test(base) ? 'order-detail-page' : ''}`} id="main-content" tabIndex={-1}>
         <div className="page-heading"><div><button className="btn small back-button" onClick={goBack}>← 返回上一页</button><div className="eyebrow">{section}</div><h1>{title}</h1><p>{description}</p></div><div className="page-heading-mark"><Icon name={isHome ? 'grid' : base === '/maintenance' ? 'shield' : 'file'} size={26} /></div></div>
-        {toast && <div className="alert ok success-toast" role="status">{toast}<button className="btn small" onClick={() => setToast('')}>关闭提示</button></div>}
+        {toast && <div className="alert ok success-toast" role="status"><span>{toast}</span><button type="button" className="toast-close" aria-label="关闭提示" title="关闭提示" onClick={() => setToast('')}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg></button></div>}
         {page}
         <footer className="page-footer"><span>家教中介管理系统</span><span>用清晰的记录，连接每一次教学合作</span></footer>
       </main>

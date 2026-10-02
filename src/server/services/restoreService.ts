@@ -15,6 +15,7 @@ import type { ActiveData } from '../activeData.js';
 import type { BackupService } from './backupService.js';
 import type { MaintenanceMutex } from '../locks.js';
 import { openDatabase, migrate, getUserVersion } from '../db.js';
+import { mergeDailyHighWater, orderDailyHighWater } from '../orderNumbers.js';
 
 interface RestoreTokenState {
   token: string;
@@ -128,6 +129,10 @@ export class RestoreService {
       );
     }
     if (!Array.isArray(manifest.files)) throw badRequest('MANIFEST_INVALID', 'manifest.files缺失');
+    if (manifest.orderDailyHighWater !== undefined && (
+      !manifest.orderDailyHighWater || typeof manifest.orderDailyHighWater !== 'object' || Array.isArray(manifest.orderDailyHighWater) ||
+      Object.entries(manifest.orderDailyHighWater).some(([day, n]) => !/^\d{8}$/.test(day) || !Number.isSafeInteger(n) || n < 0)
+    )) throw badRequest('MANIFEST_INVALID', '每日订单编号计数无效');
 
     // 包内文件清单与manifest完全一致
     const listed = new Set(manifest.files.map((f) => f.path));
@@ -366,6 +371,12 @@ export class RestoreService {
         const db = openDatabase(databaseFileOf(targetDir));
         const maxOrder = (db.prepare('SELECT COALESCE(MAX(id),0) m FROM orders').get() as { m: number }).m;
         const maxApp = (db.prepare('SELECT COALESCE(MAX(id),0) m FROM applications').get() as { m: number }).m;
+        const dailyHigh = mergeDailyHighWater(
+          this.deps.runtime.load().orderDailyHighWater,
+          orderDailyHighWater(this.deps.active.current()),
+          state.manifest.orderDailyHighWater ?? {},
+          orderDailyHighWater(db),
+        );
         const hwOrders = Math.max(localHigh.orders, manifestHigh.orders, maxOrder);
         const hwApps = Math.max(localHigh.applications, manifestHigh.applications, maxApp);
         this.setSqliteSequence(db, 'orders', hwOrders);
@@ -398,6 +409,7 @@ export class RestoreService {
           cfg.activeGenerationId = targetGenId;
           cfg.dataEpoch = newEpoch;
           cfg.numberHighWater = mergedHigh;
+          cfg.orderDailyHighWater = dailyHigh;
           this.deps.runtime.replace(cfg); // 原子写入 = 切换点
           this.deps.active.open(targetGenId, targetDir);
         } catch (err) {

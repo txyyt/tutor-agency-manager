@@ -9,7 +9,7 @@ import type { OrderRecord } from '../../shared/types';
 import Icon from '../components/Icon';
 
 interface ListResponse {
-  items: Array<OrderRecord & { tasks: OrderTask[] }>;
+  items: Array<OrderRecord & { tasks: OrderTask[]; lastActivityAt: string }>;
   total: number;
   page: number;
   pageSize: number;
@@ -94,29 +94,33 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
           </a>
         </div>
 
-        <div className="filter-bar">
-          <input placeholder="搜索编号/称呼/微信/电话" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} style={{ width: 220 }} />
-          <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
-            <option value="">全部状态</option>
-            {Object.entries(ORDER_STATUS_LABELS).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
-<label className="inline-flex"><input type="checkbox" checked={needsAction} onChange={e => { setNeedsAction(e.target.checked); setPage(1); }} />只看需要处理</label>
-          <select aria-label="订单排序" value={sort} onChange={e => { setSort(e.target.value); setPage(1); }}>
-            <option value="updated-desc">最近修改：新到旧</option>
-            <option value="updated-asc">最近修改：旧到新</option>
-            <option value="number-desc">订单编号：大到小</option>
-            <option value="number-asc">订单编号：小到大</option>
-          </select>
-          <label className="inline-flex"><input type="checkbox" checked={tasksFirst} onChange={e => { setTasksFirst(e.target.checked); setPage(1); }} />待办优先</label>
-          <input placeholder="科目筛选" value={subject} onChange={(e) => { setPage(1); setSubject(e.target.value); }} style={{ width: 110 }} />
-          <input placeholder="年级筛选" value={grade} onChange={(e) => { setPage(1); setGrade(e.target.value); }} style={{ width: 110 }} />
+        <div className="order-filters" aria-label="订单筛选">
+          <div className="filter-main">
+            <input className="filter-search" aria-label="搜索订单" placeholder="搜索编号/称呼/微信/电话" value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} />
+            <select aria-label="订单状态" value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
+              <option value="">全部状态</option>
+              {Object.entries(ORDER_STATUS_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+            <input aria-label="科目筛选" placeholder="科目筛选" value={subject} onChange={(e) => { setPage(1); setSubject(e.target.value); }} />
+            <input aria-label="年级筛选" placeholder="年级筛选" value={grade} onChange={(e) => { setPage(1); setGrade(e.target.value); }} />
+          </div>
+          <div className="filter-options">
+            <select aria-label="订单排序" value={sort} onChange={e => { setSort(e.target.value); setPage(1); }}>
+              <option value="updated-desc">最近修改：新到旧</option>
+              <option value="updated-asc">最近修改：旧到新</option>
+              <option value="number-desc">订单编号：大到小</option>
+              <option value="number-asc">订单编号：小到大</option>
+            </select>
+            <label className="filter-toggle"><input type="checkbox" checked={tasksFirst} onChange={e => { setTasksFirst(e.target.checked); setPage(1); }} />待办优先</label>
+            <label className="filter-toggle"><input type="checkbox" checked={needsAction} onChange={e => { setNeedsAction(e.target.checked); setPage(1); }} />只看需要处理</label>
+          </div>
         </div>
 
         <ErrorAlert error={error} />
 
-        {data && data.items.length === 0 && <div className="empty">暂无订单。点击“新建订单”或“粘贴家长模板建单”开始。</div>}
+        {data && data.items.length === 0 && <div className="empty">暂无符合条件的订单，可调整筛选条件或点击“新建订单”。</div>}
 
         {data && data.items.length > 0 && (
           <div className="table-scroll"><table className="list">
@@ -130,7 +134,7 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
                 <th>薪资</th>
                 <th>待办提示</th>
                 <th className="table-action">操作</th>
-                <th>最近修改</th>
+                <th title="取订单和关联老师报名记录中的最新修改时间">最近修改</th>
               </tr>
             </thead>
             <tbody>
@@ -152,7 +156,7 @@ export default function Dashboard({ navigate, query }: { navigate: (to: string) 
                   <td>{centsToYuanString(o.hourlyPayCents)}元/时{o.payNegotiable ? '（可协商）' : ''}</td>
                   <td><div className="task-list">{o.tasks?.map(t => <span key={t.kind} className={`task-tag task-${t.kind}`}>{t.label}</span>)}{!o.tasks?.length && <span className="hint">—</span>}</div></td>
                   <td className="table-action"><a href={`#/orders/${o.id}`}>查看/报名</a></td>
-                  <td><TimeText iso={o.updatedAt} /></td>
+                  <td><TimeText iso={o.lastActivityAt} /></td>
                 </tr>
               ))}
             </tbody>

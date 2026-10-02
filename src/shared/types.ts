@@ -237,6 +237,7 @@ export interface BackupManifest {
   displayTimezone: string;
   counts: { orders: number; applications: number; attachments: number };
   numberHighWater: { orders: number; applications: number };
+  orderDailyHighWater?: Record<string, number>;
   files: Array<{ path: string; sha256: string; size: number }>;
 }
 

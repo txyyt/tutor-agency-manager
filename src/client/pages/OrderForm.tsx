@@ -168,7 +168,7 @@ export default function OrderForm({ navigate, orderId }: { navigate: (to: string
           payload,
         );
         if (result.duplicateWarning) {
-          alert(`${result.duplicateWarning}\n\n已进入订单详情，请确认。`);
+          window.dispatchEvent(new CustomEvent('tam:dialog', { detail: { title: '重复订单提醒', message: `${result.duplicateWarning}\n\n已进入订单详情，请核对。` } }));
         }
         window.dispatchEvent(new CustomEvent('tam:notice', { detail: '订单已保存，开始招募' }));
         navigate(`/orders/${result.order.id}`);

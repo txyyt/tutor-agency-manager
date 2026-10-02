@@ -8,6 +8,7 @@ import JSZip from 'jszip';
 import { LIMITS, type BackupIndexEntry, type BackupKind, type BackupManifest } from '../../shared/types.js';
 import { hkCompactDateString } from '../../shared/datetime.js';
 import { badRequest } from '../errors.js';
+import { mergeDailyHighWater, orderDailyHighWater } from '../orderNumbers.js';
 import type { Clock } from '../clock.js';
 import type { RuntimeConfigStore } from '../runtimeConfig.js';
 import type { DataPaths } from '../paths.js';
@@ -158,6 +159,7 @@ export class BackupService {
           attachments: fs.readdirSync(attachmentsTarget).length,
         },
         numberHighWater: { ...this.deps.runtime.load().numberHighWater },
+        orderDailyHighWater: mergeDailyHighWater(this.deps.runtime.load().orderDailyHighWater, orderDailyHighWater(this.deps.db)),
         files,
       };
       fs.writeFileSync(path.join(snapshotDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');

@@ -1,9 +1,10 @@
 // 报名详情：资料、状态动作、费用面板（累计/最近）、收退款、更正登记、附件上传/预览/下载。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, downloadFile } from '../api';
-import { ConfirmButton, ErrorAlert, Field, StatusBadge, TextBlock, TimeText } from '../components/ui';
+import { ConfirmButton, CopyButton, ErrorAlert, Field, StatusBadge, TextBlock, TimeText } from '../components/ui';
 import { centsToYuanString, yuanStringToCents } from '../../shared/money';
-import { buildFeeNotice } from '../../shared/textgen';
+import { buildCandidateSummary, buildFeeNotice } from '../../shared/textgen';
+import { correctableFinanceFields, CORRECTION_FIELD_LABELS, type CorrectionField } from '../../shared/financeCorrection';
 import WorkflowPanel from '../components/WorkflowPanel';
 import DeleteRecord from '../components/DeleteRecord';
 import AttachmentPreview from '../components/AttachmentPreview';
@@ -20,7 +21,8 @@ export default function ApplicationDetail({ applicationId, navigate }: { navigat
   const [notice, setNotice] = useState('');
   const [feeError, setFeeError] = useState('');
   const [correctionOpen, setCorrectionOpen] = useState(false);
-  const [correction, setCorrection] = useState({ reason: '', agencyFee: '', depositDue: '', depReceived: '', depRefunded: '', supReceived: '', supRefunded: '' });
+  const [correction, setCorrection] = useState<{ reason: string; field: CorrectionField | ''; amount: string }>({ reason: '', field: '', amount: '' });
+  const [correcting, setCorrecting] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -47,30 +49,41 @@ export default function ApplicationDetail({ applicationId, navigate }: { navigat
   if (error && !data) return <ErrorAlert error={error} />;
   if (!data) return <div className="empty">加载中…</div>;
   const { application: app, order } = data;
+  const teacherSummary = buildCandidateSummary(order, app);
+  const correctable = correctableFinanceFields(app);
+  const canCorrect = order.status !== 'completed' && Object.values(correctable).some(Boolean);
+
+  const correctionFields = (Object.keys(CORRECTION_FIELD_LABELS) as CorrectionField[]).filter(field => correctable[field]);
+  const selectedField = correction.field && correctable[correction.field] ? correction.field : correctionFields[0];
+  const currentAmount = selectedField ? app[selectedField] : null;
+  let correctedAmount: number | null = null;
+  try {
+    if (correction.amount.trim()) {
+      const value = yuanStringToCents(correction.amount);
+      if (Number.isSafeInteger(value)) correctedAmount = value;
+    }
+  } catch { /* 无效金额不能提交。 */ }
+  const canSubmitCorrection = !!selectedField && correctedAmount !== null && correctedAmount !== currentAmount && !!correction.reason.trim() && !correcting;
 
   const submitCorrection = async () => {
+    if (!canSubmitCorrection || !selectedField) return;
     setFeeError('');
+    setCorrecting(true);
     try {
-      const num = (v: string): number | undefined => (v.trim() === '' ? undefined : yuanStringToCents(v));
-      const corrected: Record<string, number | undefined> = {};
-      if (correction.agencyFee !== '') corrected.agencyFeeCents = num(correction.agencyFee);
-      if (correction.depositDue !== '') corrected.depositDueCents = num(correction.depositDue);
-      if (correction.depReceived !== '') corrected.depositReceivedCents = num(correction.depReceived);
-      if (correction.depRefunded !== '') corrected.depositRefundedCents = num(correction.depRefunded);
-      if (correction.supReceived !== '') corrected.feeSupplementReceivedCents = num(correction.supReceived);
-      if (correction.supRefunded !== '') corrected.feeSupplementRefundedCents = num(correction.supRefunded);
       const r = await api.post<{ message: string }>(`/api/applications/${applicationId}/finance/corrections`, {
         operationId: crypto.randomUUID(),
         version: app.version,
         reason: correction.reason,
-        corrected,
+        corrected: { [selectedField]: correctedAmount },
       });
       setNotice(r.message);
       setCorrectionOpen(false);
-      setCorrection({ reason: '', agencyFee: '', depositDue: '', depReceived: '', depRefunded: '', supReceived: '', supRefunded: '' });
+      setCorrection({ reason: '', field: '', amount: '' });
       await load();
     } catch (e) {
       setFeeError((e as ApiError).message);
+    } finally {
+      setCorrecting(false);
     }
   };
 
@@ -127,9 +140,17 @@ export default function ApplicationDetail({ applicationId, navigate }: { navigat
             {isCurrent && <span className="badge b-awaiting_trial" style={{ marginLeft: 8 }}>当前老师</span>}
             {order.matchedApplicationId === app.id && <span className="badge b-trial_passed" style={{ marginLeft: 8 }}>成交</span>}
           </h2>
-          <a className="btn" href={`#/orders/${order.id}`}>返回订单 {order.orderNo}</a>
+          <div className="btn-row">
+            <CopyButton text={teacherSummary} label="复制老师信息（发家长）" />
+            <a className="btn" href={`#/orders/${order.id}`}>返回订单 {order.orderNo}</a>
+          </div>
         </div>
         <div className="section-divider" />
+        <details style={{ marginBottom: 16 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--primary)', fontSize: 12 }}>查看发给家长的老师信息</summary>
+          <TextBlock text={teacherSummary} maxHeight={240} />
+          <div className="hint">使用候选摘要模板，不含微信、电话、中介费用和内部备注。复制不会自动标记已推荐；发送家长后请在订单中标记。简历附件可在下方下载后另行发送。</div>
+        </details>
       <WorkflowPanel app={app} order={order} reload={load} />
         <dl className="kv">
           <dt>老师</dt><dd>{app.teacherName}（{app.gender === 'male' ? '男' : '女'}）</dd>
@@ -158,25 +179,34 @@ export default function ApplicationDetail({ applicationId, navigate }: { navigat
       <div className="card fee-tools"><details><summary><span><strong>更多费用操作</strong><small>金额更正与费用告知</small></span><span className="fee-tools-chevron" aria-hidden="true">⌄</span></summary>
         <ErrorAlert error={feeError || null} />
         <div className="fee-tool-grid">
-          {order.status !== 'completed' && <button className="fee-tool" onClick={() => setCorrectionOpen(!correctionOpen)}><strong>更正金额</strong><span>录错金额时调整，保留更正记录</span></button>}
+          <button className="fee-tool" disabled={!canCorrect} onClick={() => { setCorrectionOpen(!correctionOpen); setCorrection({ reason: '', field: '', amount: '' }); setFeeError(''); }}><strong>更正金额</strong><span>{order.status === 'completed' ? '已完成订单不能更正' : canCorrect ? '修正已设置或登记的金额，保留更正记录' : '设置金额后可更正'}</span></button>
           <button className="fee-tool" onClick={() => setFeeNoticeText(buildFeeNotice(app, order.orderNo))}><strong>费用告知</strong><span>生成文字，核对后复制给老师</span></button>
         </div>
-        {correctionOpen && (
+        {correctionOpen && canCorrect && (
           <div className="paste-result" style={{ marginTop: 10 }}>
-            <h3>更正登记（只在未完成订单可用；填写理由，展示前后累计值；真实退款请走“登记退款”）</h3>
+            <h3>更正金额</h3>
             <div className="form-grid">
-              <Field label="更正理由（必填）" required full>
-                <input type="text" value={correction.reason} onChange={(e) => setCorrection((c) => ({ ...c, reason: e.target.value }))} placeholder="如：登记时多按了一个0" />
+              <Field label="更正项目">
+                <select value={selectedField ?? ''} disabled={correcting} onChange={(e) => { setCorrection(c => ({ ...c, field: e.target.value as CorrectionField, amount: '' })); setFeeError(''); }}>
+                  {correctionFields.map(field => <option key={field} value={field}>{CORRECTION_FIELD_LABELS[field]}</option>)}
+                </select>
               </Field>
-              <Field label="中介费累计（元，留空不变）"><input type="text" value={correction.agencyFee} onChange={(e) => setCorrection((c) => ({ ...c, agencyFee: e.target.value }))} /></Field>
-              <Field label="计划保证金累计（元）"><input type="text" value={correction.depositDue} onChange={(e) => setCorrection((c) => ({ ...c, depositDue: e.target.value }))} /></Field>
-              <Field label="累计实收保证金（元）"><input type="text" value={correction.depReceived} onChange={(e) => setCorrection((c) => ({ ...c, depReceived: e.target.value }))} /></Field>
-              <Field label="累计退保证金（元）"><input type="text" value={correction.depRefunded} onChange={(e) => setCorrection((c) => ({ ...c, depRefunded: e.target.value }))} /></Field>
-              <Field label="累计补收（元）"><input type="text" value={correction.supReceived} onChange={(e) => setCorrection((c) => ({ ...c, supReceived: e.target.value }))} /></Field>
-              <Field label="累计退补款（元）"><input type="text" value={correction.supRefunded} onChange={(e) => setCorrection((c) => ({ ...c, supRefunded: e.target.value }))} /></Field>
+              <Field label="当前金额（元）">
+                <input type="text" readOnly value={currentAmount === null ? '' : centsToYuanString(currentAmount)} />
+              </Field>
+              <Field label="正确金额（元）" required>
+                <input type="text" inputMode="decimal" disabled={correcting} value={correction.amount} onChange={(e) => setCorrection(c => ({ ...c, amount: e.target.value }))} />
+              </Field>
+              <Field label="更正理由" required>
+                <input type="text" disabled={correcting} value={correction.reason} onChange={(e) => setCorrection(c => ({ ...c, reason: e.target.value }))} />
+              </Field>
             </div>
-            <div className="btn-row">
-              <button type="button" className="btn primary" disabled={!correction.reason.trim()} onClick={submitCorrection}>提交更正</button>
+            {correctedAmount !== null && currentAmount !== null && <div className="alert" role="status" style={{ marginTop: 12 }}>
+              {selectedField && CORRECTION_FIELD_LABELS[selectedField]}：{centsToYuanString(currentAmount)} 元 → {centsToYuanString(correctedAmount)} 元
+            </div>}
+            <div className="btn-row" style={{ marginTop: 12 }}>
+              <button type="button" className="btn primary" disabled={!canSubmitCorrection} onClick={submitCorrection}>{correcting ? '提交中…' : '提交更正'}</button>
+              <button type="button" className="btn" disabled={correcting} onClick={() => setCorrectionOpen(false)}>取消</button>
             </div>
           </div>
         )}

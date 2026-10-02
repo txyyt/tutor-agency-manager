@@ -153,7 +153,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
     try {
       await api.post('/api/restores/commit', { token: restoreToken });
       await refreshSession();
-      alert('恢复完成：页面将回到订单列表，数据已切换到备份时点。');
+      window.dispatchEvent(new CustomEvent('tam:dialog', { detail: { title: '恢复完成', message: '数据已切换到备份时点，已返回订单列表。' } }));
       navigate('/');
     } catch (e) {
       setError(e);

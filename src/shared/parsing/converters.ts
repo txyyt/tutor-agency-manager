@@ -113,17 +113,26 @@ export function convertSalary(raw: string): Converted {
   return { value: null, raw: t, error: `薪资“${t}”无法识别，请填写具体金额（如150元/小时）；最多两位小数` };
 }
 
+// 只接受确定的整数写法，不把“一两”“两三”等模糊描述当成数字。
+function parseChineseInteger(text: string): number {
+  if (/^\d+$/.test(text)) return Number(text);
+  const digits: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (text.length === 1 && digits[text] !== undefined) return digits[text];
+  const tens = /^([一二三四五六七八九])?十([一二三四五六七八九])?$/.exec(text);
+  if (tens) return (tens[1] ? (digits[tens[1]] ?? NaN) : 1) * 10 + (tens[2] ? (digits[tens[2]] ?? NaN) : 0);
+  return NaN;
+}
+
 // ---------- 每周次数 ----------
 export function convertSessionsPerWeek(raw: string): Converted {
   const t = raw.trim();
   if (isPlaceholder(t)) return { value: null, error: '未填写每周上课次数' };
-  const stripped = t.replace(/每周/g, '').replace(/次/g, '').replace(/每周上课/g, '').trim();
-  const range = RANGE_RE.exec(stripped);
-  if (range) return { value: null, raw: t, error: `“${t}”是次数区间，请确定具体次数` };
-  const m = /^(\d+)$/.exec(stripSpaces(stripped));
-  const n = m && m[1] !== undefined ? Number(m[1]) : NaN;
+  const s = stripSpaces(t.normalize('NFKC'))
+    .replace(/^(?:每周|一周|每星期|每个星期|每礼拜)(?:上课)?/, '')
+    .replace(/次(?:[\/／](?:周|星期|礼拜))?$/, '');
+  const n = parseChineseInteger(s);
   if (!Number.isInteger(n) || n < 1 || n > 28) {
-    return { value: null, raw: t, error: `每周上课次数“${t}”无效，请填写1—28的整数` };
+    return { value: null, raw: t, error: `每周上课次数“${t}”无法确定，请确认具体次数，填写1—28的整数（如“每周两次”“2次/周”）` };
   }
   return { value: n };
 }
@@ -132,40 +141,21 @@ export function convertSessionsPerWeek(raw: string): Converted {
 export function convertSessionMinutes(raw: string): Converted {
   const t = raw.trim();
   if (isPlaceholder(t)) return { value: null, error: '未填写每次上课时长' };
-  const cnNum: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 半: 0.5 };
-  const s = stripSpaces(t).replace(/每次上课时长|每次时长|上课时长/g, '');
+  const s = stripSpaces(t.normalize('NFKC')).replace(/^(?:每次上课时长|每次时长|上课时长|每次)/, '');
+  const number = '(?:\\d+(?:\\.\\d+)?|[零一二两三四五六七八九十]+)';
+  const integer = '(?:\\d+|[零一二两三四五六七八九十]+)';
+  const hours = (v: string) => /^\d/.test(v) ? hoursStringToMinutes(v) : parseChineseInteger(v) * 60;
 
-  // “X小时Y分钟”
-  const hm = /^(\d+(?:\.\d+)?)小时(\d+)分钟?$/.exec(s);
-  if (hm) {
-    const h = hm[1] ?? '';
-    const m = hm[2] ?? '';
-    const minutes = hoursStringToMinutes(h) + Number(m);
-    return validateMinutes(minutes, t);
-  }
-  // “X小时”
-  const hOnly = /^(\d+(?:\.\d+)?|一|两|二|三|半)小时$/.exec(s);
-  if (hOnly) {
-    const h = hOnly[1] ?? '';
-    const hours = /^\d/.test(h) ? h : String(cnNum[h] ?? NaN);
-    return validateMinutes(hoursStringToMinutes(hours), t);
-  }
-  // “X个半小时”
-  const half = /^(\d+|一|两|二|三)个半小时$/.exec(s);
-  if (half) {
-    const n = half[1] ?? '';
-    const base = /^\d+$/.test(n) ? Number(n) : (cnNum[n] ?? NaN);
-    return validateMinutes(base * 60 + 30, t);
-  }
-  // “半小时”
-  if (s === '半小时') return { value: 30 };
-  // “90分钟”
-  const mOnly = /^(\d+)分钟?$/.exec(s);
-  if (mOnly) return validateMinutes(Number(mOnly[1]), t);
-  // 纯数字 → 视为分钟
-  const bare = /^(\d+)$/.exec(s);
-  if (bare) return validateMinutes(Number(bare[1]), t);
-  return { value: null, raw: t, error: `上课时长“${t}”无法识别，请填写如“1.5小时”“90分钟”“1小时30分钟”` };
+  if (s === '半小时' || s === '半个小时') return { value: 30 };
+  const half = new RegExp(`^(${integer})(?:个半小时|(?:个)?小时半)$`).exec(s);
+  if (half) return validateMinutes(parseChineseInteger(half[1] ?? '') * 60 + 30, t);
+  const hm = new RegExp(`^(${number})(?:个)?小时(${integer})分钟?$`).exec(s);
+  if (hm) return validateMinutes(hours(hm[1] ?? '') + parseChineseInteger(hm[2] ?? ''), t);
+  const hOnly = new RegExp(`^(${number})(?:个)?小时$`).exec(s);
+  if (hOnly) return validateMinutes(hours(hOnly[1] ?? ''), t);
+  const mOnly = new RegExp(`^(${integer})(?:分钟?)?$`).exec(s);
+  if (mOnly) return validateMinutes(parseChineseInteger(mOnly[1] ?? ''), t);
+  return { value: null, raw: t, error: `上课时长“${t}”无法确定，请确认具体时长（如“1.5小时”“一个半小时”“90分钟”），区间或模糊描述需人工确认` };
 }
 
 function hoursStringToMinutes(h: string): number {
