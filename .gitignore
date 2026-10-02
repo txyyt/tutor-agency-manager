@@ -2,7 +2,6 @@
 data/
 manual-acceptance-data/
 /docs/
-/tests/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
