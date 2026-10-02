@@ -2,7 +2,7 @@
 // data/runtime.json                活动代指针、data_epoch、编号高水位、备份设置、日备份调度元数据
 // data/instance.lock               单实例运行锁（pid）
 // data/generations/<genId>/database.sqlite + attachments/
-// data/backups/{daily,manual,safety}/  备份包（均在活动代之外）
+// data/backups/{daily,lifecycle,manual,safety}/  备份包（均在活动代之外）
 // data/staging/                    导入暂存、快照临时目录、上传临时目录（均在活动代之外）
 // data/restore-ops/                恢复操作持久状态
 import fs from 'node:fs';
@@ -15,6 +15,7 @@ export interface DataPaths {
   generationsDir: string;
   backupsRoot: string;
   dailyBackupsDir: string;
+  lifecycleBackupsDir: string;
   manualBackupsDir: string;
   safetyBackupsDir: string;
   backupsIndex: string;
@@ -30,6 +31,7 @@ export function resolveDataPaths(dataDir: string): DataPaths {
     generationsDir: path.join(dataDir, 'generations'),
     backupsRoot: path.join(dataDir, 'backups'),
     dailyBackupsDir: path.join(dataDir, 'backups', 'daily'),
+    lifecycleBackupsDir: path.join(dataDir, 'backups', 'lifecycle'),
     manualBackupsDir: path.join(dataDir, 'backups', 'manual'),
     safetyBackupsDir: path.join(dataDir, 'backups', 'safety'),
     backupsIndex: path.join(dataDir, 'backups', 'index.json'),
@@ -44,6 +46,7 @@ export function ensureDirs(paths: DataPaths): void {
     paths.generationsDir,
     paths.backupsRoot,
     paths.dailyBackupsDir,
+    paths.lifecycleBackupsDir,
     paths.manualBackupsDir,
     paths.safetyBackupsDir,
     paths.stagingDir,

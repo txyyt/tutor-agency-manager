@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import JSZip from 'jszip';
 import { LIMITS, type BackupIndexEntry, type BackupKind, type BackupManifest } from '../../shared/types.js';
 import { hkCompactDateString } from '../../shared/datetime.js';
-import { badRequest } from '../errors.js';
+import { badRequest, conflict } from '../errors.js';
 import { mergeDailyHighWater, orderDailyHighWater } from '../orderNumbers.js';
 import type { Clock } from '../clock.js';
 import type { RuntimeConfigStore } from '../runtimeConfig.js';
@@ -18,6 +18,8 @@ import type { MaintenanceMutex } from '../locks.js';
 
 const KIND_TAGS: Record<BackupKind, string> = {
   daily: 'daily',
+  startup: 'startup',
+  shutdown: 'shutdown',
   manual: 'manual',
   'pre-restore': 'safety-prerestore',
   'pre-cleanup': 'safety-precleanup',
@@ -28,6 +30,7 @@ function kindDir(paths: DataPaths, settingsAutoDir: string | null, kind: BackupK
   if (kind === 'daily' && settingsAutoDir) return settingsAutoDir;
   if (kind === 'daily') return paths.dailyBackupsDir;
   if (kind === 'manual') return paths.manualBackupsDir;
+  if (kind === 'startup' || kind === 'shutdown') return paths.lifecycleBackupsDir;
   return paths.safetyBackupsDir;
 }
 
@@ -56,7 +59,7 @@ export class BackupService {
     entries: BackupIndexEntry[];
     settings: ReturnType<RuntimeConfigStore['load']>['backupSettings'];
     daily: { lastSuccessDateHk: string | null; lastSuccessAtUtc: string | null; lastError: string | null };
-    paths: { dailyDir: string; safetyDir: string; manualDir: string };
+    paths: { dailyDir: string; lifecycleDir: string; safetyDir: string; manualDir: string };
   } {
     const cfg = this.deps.runtime.load();
     const index = this.readIndex();
@@ -71,6 +74,7 @@ export class BackupService {
       },
       paths: {
         dailyDir: cfg.backupSettings.autoBackupDir ?? this.deps.paths.dailyBackupsDir,
+        lifecycleDir: this.deps.paths.lifecycleBackupsDir,
         safetyDir: this.deps.paths.safetyBackupsDir,
         manualDir: this.deps.paths.manualBackupsDir,
       },
@@ -217,35 +221,38 @@ export class BackupService {
     }
   }
 
-  /** 轮换：日备份保留N份；安全备份最多10份且≤30天；手动备份最近10份。只轮换登记在册的包。 */
-  rotate(kind: BackupKind, dailyKeepCount: number): void {
+  /** 定时备份5份，启动与关闭合计5份；安全备份10份/30天；手动10份。失败保留索引。 */
+  rotate(kind: BackupKind, _dailyKeepCount: number): void {
     const index = this.readIndex();
     const now = this.deps.clock.iso();
     let toDelete: BackupIndexEntry[] = [];
     if (kind === 'daily') {
       const dailies = index
         .filter((e) => e.kind === 'daily')
-        .sort((a, b) => (a.createdAtUtc < b.createdAtUtc ? 1 : -1));
-      toDelete = dailies.slice(Math.max(dailyKeepCount, 1));
+        .reverse().sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc));
+      toDelete = dailies.slice(LIMITS.defaultDailyBackupsToKeep);
+    } else if (kind === 'startup' || kind === 'shutdown') {
+      toDelete = index.filter(e => e.kind === 'startup' || e.kind === 'shutdown').reverse().sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc)).slice(LIMITS.maxLifecycleBackups);
     } else if (kind === 'manual') {
-      toDelete = index.filter(e => e.kind === 'manual').sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc)).slice(LIMITS.maxManualBackups);
+      toDelete = index.filter(e => e.kind === 'manual').reverse().sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc)).slice(LIMITS.maxManualBackups);
     } else if (kind === 'pre-restore' || kind === 'pre-cleanup' || kind === 'pre-delete') {
       const safes = index
         .filter((e) => e.kind === 'pre-restore' || e.kind === 'pre-cleanup' || e.kind === 'pre-delete')
-        .sort((a, b) => (a.createdAtUtc < b.createdAtUtc ? 1 : -1));
+        .reverse().sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc));
       const ageCutoff = new Date(new Date(now).getTime() - LIMITS.safetyBackupMaxAgeDays * 24 * 3600 * 1000).toISOString();
       const byAge = safes.filter((e) => e.createdAtUtc < ageCutoff);
       const byCount = safes.slice(LIMITS.maxSafetyBackups);
       toDelete = [...new Set([...byAge, ...byCount])];
     }
     if (toDelete.length === 0) return;
-    const deleteIds = new Set(toDelete.map((e) => e.id));
+    const deleteIds = new Set<string>();
     for (const e of toDelete) {
       try {
         const abs = path.join(e.dirPath, e.fileName);
         if (fs.existsSync(abs)) fs.unlinkSync(abs);
-      } catch {
-        /* 单个删除失败不影响其余；下次轮换重试 */
+        deleteIds.add(e.id);
+      } catch (error) {
+        e.deleteError = `删除失败，将保留备份并在下次轮换重试：${(error as Error).message}`;
       }
     }
     this.writeIndex(index.filter((e) => !deleteIds.has(e.id)));
@@ -258,8 +265,10 @@ export class BackupService {
     try {
       const abs = path.join(entry.dirPath, entry.fileName);
       if (fs.existsSync(abs)) fs.unlinkSync(abs);
-    } catch {
-      /* ignore */
+    } catch (error) {
+      entry.deleteError = `删除失败，备份仍保留：${(error as Error).message}`;
+      this.writeIndex(index);
+      throw conflict('BACKUP_DELETE_FAILED', '备份文件删除失败，记录已保留。请检查文件是否被占用或目录权限后重试');
     }
     this.writeIndex(index.filter((e) => e.id !== id));
   }
@@ -298,8 +307,8 @@ export class BackupService {
     const cfg = this.deps.runtime.load();
     if (patch.dailyBackupTime !== undefined) cfg.backupSettings.dailyBackupTime = patch.dailyBackupTime;
     if (patch.dailyKeepCount !== undefined) {
-      if (!Number.isInteger(patch.dailyKeepCount) || patch.dailyKeepCount < 1) {
-        throw badRequest('INVALID_SETTING', '日备份保留份数必须是正整数');
+      if (patch.dailyKeepCount !== LIMITS.defaultDailyBackupsToKeep) {
+        throw badRequest('INVALID_SETTING', '定时备份固定保留最近5份');
       }
       cfg.backupSettings.dailyKeepCount = patch.dailyKeepCount;
     }

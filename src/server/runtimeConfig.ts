@@ -5,6 +5,7 @@ import path from 'node:path';
 import { LIMITS, type BackupSettings } from '../shared/types.js';
 
 export interface RuntimeConfig {
+  backupPolicyVersion: number;
   activeGenerationId: string;
   dataEpoch: number;
   numberHighWater: { orders: number; applications: number };
@@ -35,13 +36,14 @@ export class RuntimeConfigStore {
     if (fs.existsSync(this.filePath)) {
       const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8')) as Partial<RuntimeConfig>;
       this.cache = {
+        backupPolicyVersion: 2,
         activeGenerationId: raw.activeGenerationId ?? '',
         dataEpoch: raw.dataEpoch ?? 1,
         numberHighWater: raw.numberHighWater ?? { orders: 0, applications: 0 },
         orderDailyHighWater: raw.orderDailyHighWater ?? {},
         backupSettings: {
           autoBackupDir: raw.backupSettings?.autoBackupDir ?? null,
-          dailyKeepCount: raw.backupSettings?.dailyKeepCount ?? LIMITS.defaultDailyBackupsToKeep,
+          dailyKeepCount: LIMITS.defaultDailyBackupsToKeep,
           dailyBackupTime: raw.backupSettings?.dailyBackupTime ?? '20:00',
           importMaxUploadBytes:
             raw.backupSettings?.importMaxUploadBytes ?? LIMITS.defaultImportMaxUploadBytes,
@@ -49,7 +51,7 @@ export class RuntimeConfigStore {
             raw.backupSettings?.importMaxTotalBytes ?? LIMITS.defaultImportMaxTotalBytes,
           importMaxEntries: raw.backupSettings?.importMaxEntries ?? LIMITS.defaultImportMaxEntries,
         },
-        dailyBackup: raw.dailyBackup ?? {
+        dailyBackup: (raw.backupPolicyVersion === 2 ? raw.dailyBackup : undefined) ?? {
           lastSuccessDateHk: null,
           lastSuccessAtUtc: null,
           lastError: null,
@@ -59,6 +61,7 @@ export class RuntimeConfigStore {
       };
     } else {
       this.cache = {
+        backupPolicyVersion: 2,
         activeGenerationId: '',
         dataEpoch: 1,
         numberHighWater: { orders: 0, applications: 0 },

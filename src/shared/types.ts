@@ -78,7 +78,8 @@ export const LIMITS = {
   defaultImportMaxUploadBytes: 1024 * 1024 * 1024,
   defaultImportMaxTotalBytes: 2 * 1024 * 1024 * 1024,
   defaultImportMaxEntries: 100_000,
-  defaultDailyBackupsToKeep: 30,
+  defaultDailyBackupsToKeep: 5,
+  maxLifecycleBackups: 5,
   maxManualBackups: 10,
   maxSafetyBackups: 10,
   safetyBackupMaxAgeDays: 30,
@@ -226,7 +227,7 @@ export interface ApiErrorBody {
 
 // ------- 备份 / 恢复 -------
 
-export type BackupKind = 'daily' | 'manual' | 'pre-restore' | 'pre-cleanup' | 'pre-delete';
+export type BackupKind = 'startup' | 'shutdown' | 'daily' | 'manual' | 'pre-restore' | 'pre-cleanup' | 'pre-delete';
 
 export interface BackupManifest {
   formatVersion: number;
@@ -242,6 +243,7 @@ export interface BackupManifest {
 }
 
 export interface BackupIndexEntry {
+  deleteError?: string;
   id: string;
   fileName: string;
   kind: BackupKind;

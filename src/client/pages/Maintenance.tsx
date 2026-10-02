@@ -23,7 +23,7 @@ interface BackupsResponse {
     importMaxEntries: number;
   };
   daily: { lastSuccessDateHk: string | null; lastSuccessAtUtc: string | null; lastError: string | null };
-  paths: { dailyDir: string; safetyDir: string; manualDir: string };
+  paths: { lifecycleDir: string; dailyDir: string; safetyDir: string; manualDir: string };
   scheduler: {
     dailyBackup: { lastSuccessDateHk: string | null; lastSuccessAtUtc: string | null; lastError: string | null; lastAttemptAtUtc: string | null; dueNow: boolean };
     cleanup: { lastRunAtUtc: string | null; lastResult: string | null; intervalMs: number };
@@ -39,7 +39,9 @@ interface RestorePreview {
 }
 
 const KIND_LABELS: Record<string, string> = {
-  daily: '每日自动',
+  daily: '定时备份',
+  startup: '启动备份',
+  shutdown: '关闭备份',
   manual: '手动',
   'pre-restore': '恢复前安全备份',
   'pre-delete': '删除前安全备份',
@@ -52,7 +54,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState('');
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
-  const [settings, setSettings] = useState({ autoBackupDir: '', dailyKeepCount: '30', dailyBackupTime: '20:00', importMaxUploadMB: '1024', importMaxTotalMB: '2048' });
+  const [settings, setSettings] = useState({ autoBackupDir: '', dailyKeepCount: '5', dailyBackupTime: '20:00', importMaxUploadMB: '1024', importMaxTotalMB: '2048' });
   const [restoreToken, setRestoreToken] = useState<string | null>(null);
   const [restorePreview, setRestorePreview] = useState<RestorePreview | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
@@ -170,7 +172,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
           规则：按“最后实际修改”满90天清理（查看/导出/下载不延期）。仅完成/取消订单且全部关联报名到期、费用结清/退清才整单删除；
           失败/退出报名到期且无待退、未被引用可独立删除；在办订单（招募/待试课/试课/待结算/暂停）始终保护。
           每天自动执行一次并在启动时补做；确有可删数据才生成清理前备份，备份失败则暂缓删除。
-          服务停止期间无法自动备份与清理，重启后补做。
+          服务停止期间不执行定时备份；重新启动会生成启动备份并评估到期清理。
         </div>
         <ErrorAlert error={error} />
         {notice && <div className="alert ok">{notice}</div>}
@@ -240,8 +242,8 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
       <div className="card">
         <h2>备份与恢复</h2>
         <div className="alert info">
-          每日自动备份：每天{backups?.settings.dailyBackupTime ?? '20:00'}（北京时间）检查生成；软件需保持运行。当天启动时如还没有当日备份会立即补做，当天已成功则不重复；失败5分钟后重试。手动备份保留最近10份，新备份成功后清理超出的旧包。
-          默认保留最近30份日备份（可调整）。恢复前/清理前安全备份单独保留最多10份且不超过30天。
+          定时备份：每天{backups?.settings.dailyBackupTime ?? '20:00'}（北京时间）运行到设置时间时生成，错过不补做，保留最近5份。启动和正常关闭各备份一次，两者合计保留最近5份。手动备份保留最近10份，新备份成功后清理超出的旧包。
+          恢复前/清理前安全备份单独保留最多10份且不超过30天。
           已下载到其他位置的副本不受保留规则影响。本地备份防误操作和文件损坏；建议定期把导出包另存到其他磁盘/U盘防电脑故障。
           本系统不自动上传云端。
         </div>
@@ -249,8 +251,9 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
           <>
             <h3>调度状态</h3>
             <dl className="kv" style={{ marginBottom: 12 }}>
-              <dt>日备份目录</dt><dd style={{ wordBreak: 'break-all' }}>{backups.paths.dailyDir}</dd>
-              <dt>最近成功</dt><dd>{backups.scheduler.dailyBackup.lastSuccessAtUtc ? formatHkDateTimeCn(backups.scheduler.dailyBackup.lastSuccessAtUtc) : '尚无'}（{backups.scheduler.dailyBackup.lastSuccessDateHk ?? '—'}）</dd>
+              <dt>定时备份目录</dt><dd style={{ wordBreak: 'break-all' }}>{backups.paths.dailyDir}</dd>
+              <dt>启动/关闭备份目录</dt><dd style={{ wordBreak: 'break-all' }}>{backups.paths.lifecycleDir}</dd>
+              <dt>定时备份最近成功</dt><dd>{backups.scheduler.dailyBackup.lastSuccessAtUtc ? formatHkDateTimeCn(backups.scheduler.dailyBackup.lastSuccessAtUtc) : '尚无'}（{backups.scheduler.dailyBackup.lastSuccessDateHk ?? '—'}）</dd>
               <dt>最近错误</dt><dd style={{ color: backups.daily.lastError ? 'var(--danger)' : undefined }}>{backups.daily.lastError ?? '无'}</dd>
               <dt>上次清理</dt><dd>{backups.scheduler.cleanup.lastRunAtUtc ? formatHkDateTimeCn(backups.scheduler.cleanup.lastRunAtUtc) : '尚未运行'}：{backups.scheduler.cleanup.lastResult ?? '—'}</dd>
             </dl>
@@ -263,10 +266,10 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
               <Field label="自动备份目录（留空=默认数据目录内backups/daily；不能与数据目录重合）" full>
                 <input type="text" value={settings.autoBackupDir} onChange={(e) => setSettings((s) => ({ ...s, autoBackupDir: e.target.value }))} placeholder="如 D:\tutor-backups" />
               </Field>
-              <Field label="日备份保留份数（正整数，默认30）">
-                <input type="number" min={1} value={settings.dailyKeepCount} onChange={(e) => setSettings((s) => ({ ...s, dailyKeepCount: e.target.value }))} />
+              <Field label="定时备份保留份数">
+                <input type="number" value={5} readOnly />
               </Field>
-              <Field label="每日备份时间（北京时间）" hint="默认20:00，保存后生效；当天启动补做的备份也计入每日一次。">
+              <Field label="每日备份时间（北京时间）" hint="默认20:00，可修改；仅在软件运行到设置时间时备份，错过不补做。">
                 <input aria-label="每日备份时间（北京时间）" type="time" value={settings.dailyBackupTime} onChange={e => setSettings(s => ({ ...s, dailyBackupTime: e.target.value }))} />
               </Field>
               <Field label="导入上传上限（MB）" hint="上传的备份ZIP文件本身允许的最大大小。">
@@ -289,7 +292,7 @@ export default function Maintenance({ navigate }: { navigate: (to: string) => vo
                 <tbody>
                   {backups.entries.map((e) => (
                     <tr key={e.id}>
-                      <td>{KIND_LABELS[e.kind] ?? e.kind}</td>
+                      <td>{KIND_LABELS[e.kind] ?? e.kind}{e.deleteError && <div className="err">{e.deleteError}</div>}</td>
                       <td style={{ wordBreak: 'break-all', fontSize: 12 }}>{e.fileName}</td>
                       <td><TimeText iso={e.createdAtUtc} /></td>
                       <td>{(e.sizeBytes / 1024 / 1024).toFixed(2)}MB</td>

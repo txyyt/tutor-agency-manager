@@ -1,6 +1,6 @@
-// 调度器：每日02:00（Asia/Hong_Kong）自动备份+当日启动补做+失败5分钟重试；清理启动补做+每24小时。
+// 调度器：运行中到达设置时间才备份，错过不补做；启动/关闭备份单独保存。清理启动执行+每24小时。
 // 只在系统运行时执行；不安装系统级定时任务；停机期间不执行、不假造历史快照。
-import { hkDateString, hkPartsFromUtc } from '../../shared/datetime.js';
+import { hkDateString } from '../../shared/datetime.js';
 import type { Clock } from '../clock.js';
 import type { RuntimeConfigStore } from '../runtimeConfig.js';
 import type { BackupService } from './backupService.js';
@@ -24,7 +24,8 @@ export interface SchedulerStatus {
 export class Scheduler {
   private timer: NodeJS.Timeout | null = null;
   private lastCleanupAtMs: number | null = null;
-  private running = false;
+  private currentTask: Promise<void> | null = null;
+  private lastScheduledCheckMs: number | null = null;
 
   constructor(
     private deps: {
@@ -38,7 +39,7 @@ export class Scheduler {
   start(): void {
     this.timer = setInterval(() => void this.tick(), 30_000);
     this.timer.unref();
-    // 启动立即评估一次（补做当日备份、启动补清理）
+    // 初次评估只检查当前时间，不补做错过的定时备份；启动清理。
     void this.tick(true);
   }
 
@@ -47,35 +48,42 @@ export class Scheduler {
     this.timer = null;
   }
 
-  private async tick(onStartup = false): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    try {
-      await this.tickDailyBackup(onStartup);
+  async idle(): Promise<void> { await this.currentTask; }
+
+  async lifecycleBackup(kind: 'startup' | 'shutdown'): Promise<void> {
+    await this.idle();
+    await this.deps.backup.createBackup(kind);
+  }
+
+  private tick(onStartup = false): Promise<void> {
+    if (this.currentTask) return this.currentTask;
+    this.currentTask = (async () => {
+      await this.tickDailyBackup();
       await this.tickCleanup(onStartup);
-    } finally {
-      this.running = false;
-    }
+    })().finally(() => { this.currentTask = null; });
+    return this.currentTask;
   }
 
-  /** 评估并执行当日备份规则（02:00后且当日未成功；失败5分钟重试）。公开供测试注入时钟后调用。 */
-  async tickDailyBackup(onStartup = false): Promise<void> {
-    const cfg = this.deps.runtime.load();
+  private scheduledTimeMs(nowIso: string): number {
+    return Date.parse(`${hkDateString(nowIso)}T${this.deps.runtime.load().backupSettings.dailyBackupTime}:00+08:00`);
+  }
+
+  private isDue(nowIso: string): boolean {
+    const now = Date.parse(nowIso);
+    const scheduled = this.scheduledTimeMs(nowIso);
+    const crossed = this.lastScheduledCheckMs === null
+      ? now >= scheduled && now < scheduled + 60_000
+      : this.lastScheduledCheckMs < scheduled && now >= scheduled;
+    return crossed && this.deps.runtime.load().dailyBackup.lastSuccessDateHk !== hkDateString(nowIso);
+  }
+
+  /** 仅在运行中跨过设置时间时触发；启动太晚不补做。日期仅用于防止同一时点重复生成。 */
+  async tickDailyBackup(): Promise<void> {
     const nowIso = this.deps.clock.iso();
-    const hk = hkPartsFromUtc(nowIso);
-    const today = hkDateString(nowIso);
-    const [hour = 20, minute = 0] = cfg.backupSettings.dailyBackupTime.split(':').map(Number);
-    const pastScheduledTime = hk.hour * 60 + hk.minute >= hour * 60 + minute;
-    const doneToday = cfg.dailyBackup.lastSuccessDateHk === today;
-    const lastAttempt = cfg.dailyBackup.lastAttemptAtUtc
-      ? new Date(cfg.dailyBackup.lastAttemptAtUtc).getTime()
-      : 0;
-    const retryDue = this.deps.clock.now().getTime() - lastAttempt >= 5 * 60 * 1000;
-    if ((onStartup || pastScheduledTime || cfg.dailyBackup.lastError !== null) && !doneToday && retryDue) {
-      await this.runDailyBackup(nowIso, today);
-    }
+    const due = this.isDue(nowIso);
+    this.lastScheduledCheckMs = Date.parse(nowIso);
+    if (due) await this.runDailyBackup(nowIso, hkDateString(nowIso));
   }
-
 
   async runDailyBackup(nowIso: string, today: string): Promise<void> {
     this.deps.runtime.mutate((c) => {
@@ -123,15 +131,13 @@ export class Scheduler {
   status(): SchedulerStatus {
     const cfg = this.deps.runtime.load();
     const nowIso = this.deps.clock.iso();
-    const hk = hkPartsFromUtc(nowIso);
-    const today = hkDateString(nowIso);
     return {
       dailyBackup: {
         lastSuccessDateHk: cfg.dailyBackup.lastSuccessDateHk,
         lastSuccessAtUtc: cfg.dailyBackup.lastSuccessAtUtc,
         lastError: cfg.dailyBackup.lastError,
         lastAttemptAtUtc: cfg.dailyBackup.lastAttemptAtUtc,
-        dueNow: hk.hour * 60 + hk.minute >= Number(cfg.backupSettings.dailyBackupTime.slice(0, 2)) * 60 + Number(cfg.backupSettings.dailyBackupTime.slice(3)) && cfg.dailyBackup.lastSuccessDateHk !== today,
+        dueNow: this.isDue(nowIso),
       },
       cleanup: {
         lastRunAtUtc: cfg.cleanupState.lastRunAtUtc,

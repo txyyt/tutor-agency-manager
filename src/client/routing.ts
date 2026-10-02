@@ -9,6 +9,8 @@ export function useHashRoute() {
   const active = useRef(route);
   const positions = useRef(new Map<string, number>());
   const pagePositions = useRef(new Map<string, number>());
+  const cursor = useRef(0);
+  const entryIndexes = useRef(new Map<string, number>([[route.key, 0]]));
   const requestedReturn = useRef<string | null>(null);
 
   useEffect(() => {
@@ -27,6 +29,8 @@ export function useHashRoute() {
       const top = returning ? positions.current.get(storedKey)! : requestedReturn.current === path ? pagePositions.current.get(path) ?? 0 : 0;
       requestedReturn.current = null;
       const key = returning ? storedKey : entryKey();
+      cursor.current = returning ? entryIndexes.current.get(key) ?? 0 : cursor.current + 1;
+      entryIndexes.current.set(key, cursor.current);
       window.history.replaceState({ ...window.history.state, tamScrollKey: key }, '');
       active.current = { path, top, key };
       setRoute(active.current);
@@ -71,5 +75,9 @@ export function useHashRoute() {
     requestedReturn.current = options?.restoreScroll ? to : null;
     window.location.hash = to;
   }, []);
-  return { path: route.path, navigate };
+  const back = useCallback((fallback: string) => {
+    if (cursor.current > 0) window.history.back();
+    else navigate(fallback, { restoreScroll: true });
+  }, [navigate]);
+  return { path: route.path, navigate, back };
 }

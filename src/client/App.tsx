@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ensureSession } from './api';
 import { useHashRoute } from './components/ui';
 import Dashboard from './pages/Dashboard';
@@ -10,17 +10,11 @@ import Maintenance from './pages/Maintenance';
 import Icon, { type IconName } from './components/Icon';
 
 export default function App() {
-  const { path, navigate } = useHashRoute();
-  const history = useRef<string[]>([]);
-  const previousPath = useRef(path);
-  useEffect(() => {
-    if (previousPath.current !== path) { history.current.push(previousPath.current); previousPath.current = path; }
-  }, [path]);
+  const { path, navigate, back } = useHashRoute();
   const [dialog, setDialog] = useState<{ title: string; message: string; onConfirm?: () => void } | null>(null);
   const executeBack = () => {
-    const prior = history.current.pop();
     const fallback = /^\/orders\/\d+\/(edit|apply)/.test(path) ? path.split('/').slice(0, 3).join('/') : /^\/applications\/\d+\/edit/.test(path) ? path.replace(/\/edit$/, '') : base.startsWith('/applications/') ? document.querySelector<HTMLAnchorElement>('a.btn[href^="#/orders/"]')?.getAttribute('href')?.slice(1) ?? '/' : '/';
-    previousPath.current = prior ?? fallback; navigate(prior ?? fallback, { restoreScroll: true });
+    back(fallback);
   };
   const goBack = () => {
     if (document.querySelector('form[data-dirty="true"]')) {
@@ -95,7 +89,14 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" onClickCapture={event => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href^="#/"]');
+      const destination = link?.getAttribute('href')?.slice(1);
+      if (!destination || destination === path || !document.querySelector('form[data-dirty="true"]')) return;
+      event.preventDefault(); event.stopPropagation();
+      setDialog({ title: '放弃未保存的修改？', message: '有未保存的资料，确定离开并放弃修改？', onConfirm: () => navigate(destination) });
+    }}>
       {dialog && <div className="modal-backdrop" onClick={event => { if (event.target === event.currentTarget) setDialog(null); }}>
         <div className="modal-panel" role="dialog" aria-modal="true" aria-label={dialog.title}>
           <h3 style={{ marginTop: 0 }}>{dialog.title}</h3>

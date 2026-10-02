@@ -1,52 +1,74 @@
-// 开发模式：同时启动后端(tsx watch)与前端(vite dev, /api代理到127.0.0.1:3000)。
+// 开发模式：前端Vite热更新；后端源码变化先完成关闭备份，再重新启动。
 import { spawn } from 'node:child_process';
-
-const procs = [];
-
-function start(name, cmd, args, color) {
-  const p = spawn(cmd, args, {
-    shell: true,
-    env: { ...process.env, FORCE_COLOR: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const tag = `\x1b[${color}m[${name}]\x1b[0m`;
-  const forward = (stream) => {
-    let buf = '';
-    stream.on('data', (d) => {
-      buf += d.toString();
-      let idx;
-      while ((idx = buf.indexOf('\n')) !== -1) {
-        const line = buf.slice(0, idx);
-        buf = buf.slice(idx + 1);
-        console.log(tag, line);
-      }
-    });
-  };
-  forward(p.stdout);
-  forward(p.stderr);
-  p.on('exit', (code) => {
-    console.log(tag, `退出（code=${code}）`);
-    shutdown(code ?? 0);
-  });
-  procs.push(p);
-  return p;
-}
+import { watch } from 'node:fs';
+import { once } from 'node:events';
+import path from 'node:path';
 
 let exiting = false;
-function shutdown(code = 0) {
+let restarting = false;
+let server;
+let reloadTimer;
+const watchers = [];
+
+function launch(name, args, ipc = false) {
+  const child = spawn(process.execPath, args, {
+    env: { ...process.env, FORCE_COLOR: '1' },
+    stdio: ipc ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
+  });
+  for (const stream of [child.stdout, child.stderr]) {
+    let buffered = '';
+    stream.on('data', data => {
+      buffered += data.toString();
+      let end;
+      while ((end = buffered.indexOf('\n')) >= 0) {
+        console.log(`[${name}] ${buffered.slice(0, end)}`);
+        buffered = buffered.slice(end + 1);
+      }
+    });
+  }
+  child.on('exit', code => {
+    if (!exiting && !(name === 'server' && restarting)) void shutdown(code ?? 1);
+  });
+  child.on('error', error => { console.error(`[${name}]`, error); void shutdown(1); });
+  return child;
+}
+
+function startServer() { return launch('server', ['--import', 'tsx', 'src/server/main.ts'], true); }
+const client = launch('client', [path.join('node_modules', 'vite', 'bin', 'vite.js')]);
+server = startServer();
+
+async function stopServer(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const finished = once(child, 'exit');
+  if (child.connected) child.send('tam:shutdown');
+  await finished; // 不强杀后端，让关闭备份写完。
+}
+
+async function shutdown(code = 0) {
   if (exiting) return;
   exiting = true;
-  for (const p of procs) {
-    try {
-      p.kill();
-    } catch {
-      /* ignore */
-    }
-  }
-  process.exit(code);
+  clearTimeout(reloadTimer);
+  for (const watcher of watchers) watcher.close();
+  client.kill();
+  try { await stopServer(server); }
+  finally { process.exit(code); }
 }
-process.on('SIGINT', () => shutdown(0));
-process.on('SIGTERM', () => shutdown(0));
 
-start('server', 'npx', ['tsx', 'watch', 'src/server/main.ts'], '36');
-start('client', 'npx', ['vite'], '35');
+for (const directory of ['src/server', 'src/shared']) {
+  watchers.push(watch(directory, { recursive: true }, () => {
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(async () => {
+      if (exiting || restarting) return;
+      restarting = true;
+      try {
+        console.log('[server] 源码变化，保存关闭备份后重启…');
+        await stopServer(server);
+        if (!exiting) server = startServer();
+      } finally { restarting = false; }
+    }, 300);
+  }));
+}
+process.on('SIGINT', () => void shutdown());
+process.on('SIGTERM', () => void shutdown());
+
+process.on('message', message => { if (message === 'tam:shutdown') void shutdown(); });
