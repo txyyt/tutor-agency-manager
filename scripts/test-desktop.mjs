@@ -150,8 +150,9 @@ try {
   await expect(modal.locator('iframe')).toHaveAttribute('src', /^blob:/);
   const pdfHeader = await modal.locator('iframe').evaluate(async frame => (await (await fetch(frame.src)).text()).slice(0, 5));
   assert.equal(pdfHeader, '%PDF-');
-  const [previewPage] = await Promise.all([desktop.waitForEvent('window'), modal.getByRole('link', { name: '打开原文件', exact: true }).click()]);
-  await expect.poll(() => previewPage.url()).toMatch(/^blob:/);
+  await modal.getByRole('link', { name: '打开原文件', exact: true }).click();
+  // PDF原生查看器在云端Windows上不一定暴露Playwright Page；验证实际Electron窗口。
+  await expect.poll(() => desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => win.webContents.getURL()).find(url => url.startsWith('blob:'))), { timeout: 30_000 }).toMatch(/^blob:/);
   await desktop.evaluate(({ BrowserWindow }) => { for (const win of BrowserWindow.getAllWindows()) if (win.webContents.getURL().startsWith('blob:')) win.close(); });
   const downloadPath = path.join(dataDir, 'downloaded-resume.pdf');
   await desktop.evaluate(({ session }, destination) => session.defaultSession.once('will-download', (_event, item) => item.setSavePath(destination)), downloadPath);
@@ -204,6 +205,18 @@ try {
   const afterRestart = JSON.parse(fs.readFileSync(path.join(dataDir, 'backups/index.json'), 'utf8'));
   assert.deepEqual(afterRestart.map(entry => entry.kind), ['startup', 'shutdown', 'startup', 'shutdown']);
   console.log('桌面验收通过：自定义最小化/最大化/还原、关闭到托盘不停止服务、重复启动恢复窗口、退出确认与备份，以及原有附件和持久化流程。');
+} catch (error) {
+  // CI失败时保留模拟环境的日志和截图，避免只看到退出码。
+  fs.mkdirSync('test-results/desktop', { recursive: true });
+  const log = path.join(dataDir, 'logs/desktop.log');
+  if (fs.existsSync(log)) fs.copyFileSync(log, 'test-results/desktop/backend.log');
+  const page = desktop?.windows()[0];
+  if (page) await page.screenshot({ path: 'test-results/desktop/failure.png', timeout: 5000 }).catch(() => {});
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const message = String(error.stack ?? error).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    console.error(`::error title=Electron桌面验收失败::${message}`);
+  }
+  throw error;
 } finally {
   if (desktop) {
     for (const page of desktop.windows()) {
