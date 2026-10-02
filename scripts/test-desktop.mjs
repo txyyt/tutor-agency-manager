@@ -29,6 +29,8 @@ try {
   assert.equal(info.preferences.contextIsolation, true);
   assert.equal(info.preferences.sandbox, true);
   assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
+  // 以最小允许窗口验收宽弹窗，确保按钮不会被侧栏遮挡。
+  await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 720));
   await desktop.evaluate(({ shell, dialog }) => {
     globalThis.openedBackupDirectories = [];
     shell.openPath = async directory => {

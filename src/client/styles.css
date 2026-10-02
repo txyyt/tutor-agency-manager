@@ -47,7 +47,7 @@ button, a { touch-action: manipulation; }
 .breadcrumb-separator { color: #d2d9d5; }
 .topbar-meta { display: flex; gap: 23px; align-items: center; font-size: 11px; color: var(--muted); }
 .container { max-width: 1600px; width: 100%; margin: 0 auto; padding: 32px 38px 24px; outline: none; }
-.container { animation: workspace-enter .32s ease-out both; }
+.container { animation: workspace-enter .32s ease-out; }
 .loading-state { opacity: 0; min-height: 190px; padding: 32px; border: 1px solid var(--line); border-radius: 14px; background: #fff; transition: opacity .2s ease; }
 .loading-state.visible { opacity: 1; }.loading-state.compact { min-height: 0; padding: 20px 24px; margin-bottom: 20px; }
 .loading-caption { display: flex; align-items: center; gap: 11px; color: #7b9085; font-size: 12px; }
