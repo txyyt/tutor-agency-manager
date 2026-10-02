@@ -54,6 +54,8 @@ jobs:
         run: npm run test:desktop
       - name: Build Windows installer
         run: npm run dist:win
+      - name: Test uninstall data policy
+        run: ./scripts/test-uninstall.ps1
       - name: Test packaged executable
         run: |
           $env:DESKTOP_TEST_EXECUTABLE = (Resolve-Path 'release/win-unpacked/家教中介管理系统.exe').Path
